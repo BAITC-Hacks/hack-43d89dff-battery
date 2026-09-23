@@ -1,6 +1,6 @@
 # Engineering Handoff: Business Task-Card Marketplace
 
-## Product idea
+## Product idea and working assumptions
 
 This repository is a five-hour hackathon MVP for the AI Sana case: gamification of practical business tasks.
 
@@ -8,10 +8,21 @@ A business representative writes a rough task description. The system asks clari
 
 The central gamification target is the **business task's readiness**, not company prestige and not student rankings. A better-defined task receives a higher score and a better catalog position. The system must never automatically assign a team.
 
-## Required end-to-end flow
+This is a small, dependency-free hackathon MVP, not a production platform.
+Keep changes focused on making this workflow clearer and more reliable. Do not
+add a new framework, package manager, authentication system, or external
+service unless the product is explicitly reprioritized. Read the code and its
+tests before extending a behavior described here; the implementation and tests
+are the source of truth if they differ from this document.
+
+## Product end-to-end flow
 
 1. Business enters a weak draft in any language (KZ/RU/EN mixed).
-2. Question-generation model (`generateQuestions.py` - AI Task Architect) normalizes the draft, does a provisional 100-point evaluation to find gaps, and asks 3-5 targeted clarifying questions in a specified `TARGET_LANGUAGE`.
+2. Question generation analyzes readiness gaps and returns 3–7 targeted
+   questions. The online prompt asks the provider to preserve the source
+   language. The offline generator currently returns seven fixed English
+   questions. Explicit `TARGET_LANGUAGE` selection is not implemented in the
+   current UI/model signature.
 3. Business answers them.
 4. Task-card model (`generateTaskCard.py`) converts draft, Q&A, and summary into an editable card matching the updated `TaskCard` dictionary schema.
 5. Rating engine scores confirmed fields from 0 to 100 and explains missing information.
@@ -19,7 +30,12 @@ The central gamification target is the **business task's readiness**, not compan
 7. Students browse/filter the catalog and submit a proposal.
 8. Business manually accepts or rejects proposals.
 
-## Repository structure
+Keep the distinction between intended product behavior and implemented
+behavior visible when proposing follow-up work; do not assume a language
+selector, automatic company identity, or ranking of student teams already
+exists.
+
+## Current repository structure
 
 ```text
 .
@@ -27,19 +43,122 @@ The central gamification target is the **business task's readiness**, not compan
 ├── agents.md                    # This handoff document
 ├── .env                         # Local secret; ignored by Git
 ├── .gitignore                   # Must keep .env ignored
-├── frontend/                    # Vanilla HTML/CSS/JS SaaS UI
+├── frontend/                    # Vanilla HTML/CSS/JS; no compile step
 │   ├── index.html
 │   ├── styles.css
-│   └── app.js
-└── backend/
-    ├── server.py                # Built-in http.server functioning as API router
-    └── models/
-        ├── generateQuestions.py # Implements the AI Task Architect & provisional Evaluation Engine
-        ├── generateTaskCard.py  # Implements task-card generation with the new schema template
-        └── evaluateTaskCard.py  # Reserved for final deterministic readiness scoring
+│   ├── app.js                    # Shared UI helpers, hash router, catalog, public details
+│   ├── api.js                    # Same-origin fetch adapter and browser-held owner profiles
+│   ├── workspace.js              # Business workflow and team proposal workflow
+│   ├── examples.js               # Fictional, read-only briefs for an empty/unavailable catalog
+│   └── favicon.svg
+├── backend/
+│   ├── api.py                   # Canonical JSON API and allowlisted frontend asset server
+│   ├── server.py                # Compatibility launcher that delegates to backend.api
+│   ├── service.py               # Marketplace workflow, state rules, authorization
+│   ├── database.py              # SQLite schema, reads, and transactions
+│   └── models/
+│       ├── generateQuestions.py # Question generation (provider and offline paths)
+│       ├── generateTaskCard.py  # Task-card generation and normalization
+│       └── evaluateTaskCard.py  # Final deterministic readiness scoring
+└── tests/
+    ├── test_marketplace_workflow.py
+    ├── test_evaluate_task_card.py
+    ├── test_model_boundaries.py
+    └── test_http_api.py
 ```
 
-The project now includes a simple frontend UI (SaaS aesthetic) and an HTTP server routing APIs, utilizing only standard-library Python to maintain the dependency-free MVP state.
+`python3 -m backend.api` is the canonical application entry point. It serves
+the website and JSON API from one origin. `backend/server.py` exists only as a
+compatible launcher; add routes and static assets to `backend/api.py`, not a
+second router. The API serves only the explicit `FRONTEND_ASSETS` allowlist.
+When adding a browser asset, add it to that allowlist and cover the route in
+`tests/test_http_api.py`; never expose arbitrary repository paths, `.env`, or
+database files through static serving.
+
+## Frontend architecture and routes
+
+The browser code is ordinary scripts loaded in this order from `index.html`:
+`api.js`, `examples.js`, `workspace.js`, then `app.js`. There is no bundler,
+framework, CSS utility library, or component package. Keep this order when
+adding globals; do not introduce module imports unless the page and server
+serving rules are intentionally updated together.
+
+- `index.html` owns the semantic page shell: header and navigation, role
+  selector, main root (`#app-root`), footer, one shared native `<dialog>`, and
+  a live-region toast.
+- `app.js` owns the `#` hash router and catalog, public task details, the
+  “how it works” and readiness pages, and the shared `window.UI` helpers
+  (`escape`, `icon`, `modal`, `toast`, `navigate`, `taskCard`, `readiness`,
+  and navigation refresh). Route names are `#catalog`, `#task/{id}`,
+  `#how-it-works`, `#readiness`, `#create`, `#workspace`, `#edit/{id}`, and
+  `#proposals`. When adding a route, update the router, page title, active
+  navigation behavior, and mobile navigation behavior together.
+- `workspace.js` exposes `window.Workspace.render(root, route, id)` for the
+  business draft/questions/card/publish workflow and the two proposal views.
+  `showProfile(role, afterSave)` handles the separate business/team setup
+  dialog; `showProposal(task)` handles student submission. Keep workflow and
+  form logic here rather than adding it to HTTP route code.
+- `api.js` exposes `window.Api`. It translates browser actions to the existing
+  REST API and holds the two MVP owner profiles separately in local storage,
+  keyed by API origin and role. The raw owner token is returned once by profile
+  creation and kept on that device. This is a prototype convenience, not secure
+  production account storage or multi-device sign-in.
+- `examples.js` provides explicitly fictional, read-only catalog examples.
+  Examples are marked `is_example`, are not returned by the server, and must
+  never be submitted, published, or written into the SQLite database.
+- `styles.css` contains the design tokens, base controls, layout components,
+  pattern classes, and responsive breakpoints. Use the existing custom
+  properties and classes before adding one-off values.
+
+The current visual direction is Swiss International Typographic Style:
+white, black, muted `#F2F2F2`, and signal red `#FF3000`; square corners; visible
+rules; oversized, mostly uppercase Inter/Helvetica typography; and grid, dot,
+or diagonal patterns. Red marks actions, section numbers, and status. Keep
+content flush-left, use negative space deliberately, avoid gradients and
+shadows, and make desktop and mobile states feel like the same system. Inter
+loads from Google Fonts with a system sans-serif fallback; the page still
+works without that network request.
+
+Use semantic landmarks and headings, label controls, provide visible keyboard
+focus, preserve keyboard operation and `prefers-reduced-motion`, and keep
+touch targets usable. Escape user- or model-provided text before interpolating
+it into HTML; prefer `textContent` for plain text, validate URLs before using
+them as links, and encode IDs in browser routes/API paths. Never insert owner
+tokens, drafts, or answers into public catalog/detail templates. The `#main-content`
+skip link is handled specially so it focuses the main region without changing
+the current route.
+
+Catalog pagination currently retrieves API pages of up to 100 tasks and then
+filters, sorts, and paginates the loaded list in the browser. If the catalog
+outgrows MVP scale, move filtering/pagination server-side while preserving the
+existing API query parameters and score-descending default. A live empty or
+unavailable catalog can display labeled example briefs; actual task changes
+must always use the API and surface connection failures to the user.
+
+### Frontend API response shapes
+
+The service returns canonical keys; frontend code should use these keys rather
+than the old mock frontend's `*_json` names or `{task: ...}` wrappers:
+
+```text
+GET /api/catalog                 -> {items: Task[], total, limit, offset}
+GET /api/tasks/{id}              -> Task
+GET /api/businesses/{id}/tasks   -> Task[]
+GET /api/tasks/{id}/proposals    -> Proposal[]
+GET /api/teams/{id}/proposals    -> Proposal[]
+POST/PATCH workflow actions      -> updated Task, Proposal, or profile
+
+Task:     {id, business_id, business_name, status, card, evaluation,
+           created_at, updated_at, published_at, ...owner-only fields}
+Proposal: {id, task_id, team_id, message, approach, estimated_timeline,
+           portfolio_links, status, created_at, ...team detail for business}
+```
+
+`GET /api/catalog` and `GET /api/catalog/{id}` are public. `GET /api/tasks/{id}`
+is owner-aware: it returns owner-only draft, question, answer, and confirmation
+fields only when called with the owning business token. Keep the UI aligned
+with the service's response shape and with the role-specific headers in
+`api.js`.
 
 ## Persistence schema
 
@@ -234,24 +353,62 @@ Levels are `draft` 0–39, `working` 40–69, `ready` 70–89, and `priority`
 90–100. If scoring changes, increment `scoring_version`, update docs/tests,
 and plan a refresh of persisted `evaluation_json` records.
 
-## Change checklist and verification
+## How to extend the project safely
 
-When extending functionality:
+When implementing a user-facing feature, first trace the current route,
+service method, stored representation, API response, browser adapter, and UI.
+Put workflow rules and authorization in `MarketplaceService`; keep `api.py`
+focused on HTTP parsing/serialization and keep prompts/scoring logic out of
+routes. Make the smallest consistent change across those layers, then update
+the README or this handoff when a contract changes.
 
-1. Put workflow rules in `MarketplaceService`, not routes/models.
-2. Preserve authorization and public/private response separation.
-3. For a new card field, update template, normalization, prompts, editable
-   allowlist (if appropriate), docs, tests, and evaluator if score-relevant.
-4. For database changes, implement a migration and test an existing DB.
-5. For a new proposal action, define valid source status and all transitions.
-6. Test with no OpenAI key; tests must not consume credits or expose secrets.
-7. Add model-boundary tests for malformed, partial, and fenced provider output.
-   The production path must normalize it before persistence/evaluation.
-8. Keep the proposal acceptance unique-index failure mapped to the same `409
-   task_already_has_team` response as the pre-check; it is the concurrency
-   safety net for competing acceptance requests.
+For any task-card field change, consider every representation: generated-card
+template and normalization, prompt, protected/editable allowlist, API patch
+merge behavior, deterministic evaluator if score-relevant, frontend editor,
+public task detail, example fixtures if useful, and tests/docs. Do not expose
+protected generation metadata as editable input. Nested object patches merge;
+array patches replace the array.
 
-Verified command:
+For schema changes, write an explicit backwards-compatible migration and
+exercise it against a database created with the previous schema. `CREATE
+TABLE IF NOT EXISTS` does not alter an existing table; a fresh database test
+alone does not establish migration safety.
+
+For proposal actions, define valid source statuses, allowed transitions,
+ownership checks, response visibility, and collision behavior. SQLite has a
+partial unique index allowing one accepted proposal per task. Preserve the
+pre-check and map a competing acceptance's unique-index failure to the same
+`409 task_already_has_team` result.
+
+Model/provider output is untrusted even when JSON is requested. Preserve
+normalization at both the model boundary and `MarketplaceService` storage
+boundary. Add coverage for malformed, partial, duplicate, and fenced output
+when changing that contract. Never require a real API key or consume model
+credits for ordinary tests. Do not log or print secrets, owner tokens, or
+private draft/answer contents in diagnostics.
+
+For a browser feature, update `index.html` script order only if a new global
+script is necessary. Use `window.Api` for real data and mutations, `window.UI`
+for shared controls and rendering helpers, and `window.Workspace` for existing
+business/team flows. Preserve separate business and team owner tokens, send
+tokens only to the matching protected endpoints, and keep public catalog
+responses free of drafts, answers, tokens, and business-only metadata. If a
+new static file is needed, add just that file to the API's explicit asset
+allowlist. Do not restore local mock mutations; local example cards are
+read-only.
+
+New browser content must be escaped; external/user-supplied links must be
+validated for `http:` or `https:` before being rendered as anchors. Keep
+loading/error states, prevent duplicate form submission, handle navigation
+during pending requests, and retain the user's input after an API error.
+Preserve keyboard focus when replacing a form with its next step. Add the
+appropriate narrow-screen CSS and verify it does not introduce horizontal
+overflow.
+
+## Verification
+
+Run with Python 3.11 or newer (use the matching interpreter if `python3`
+points to an older system Python). Verified project test command:
 
 ```bash
 python3 -B -m unittest discover -s tests -v
@@ -261,9 +418,25 @@ The suite covers score boundaries, full/empty cards, token enforcement,
 confirmation-before-publishing, catalog filtering, proposal creation, and a
 complete offline task-to-manual-acceptance workflow. It also covers malformed
 optional task-card fields, fenced question JSON, and persistence of a partial
-injected task-card response. Local socket binding was restricted in the
-development sandbox, so add HTTP-level integration tests in an environment
-where a test port can be opened.
+injected task-card response. HTTP tests call the handler directly and cover API
+behavior, the static asset allowlist, and private-file/traversal protection
+without opening a local port.
+
+Frontend scripts need no package installation or build step. Optional syntax
+checks use Node.js:
+
+```bash
+node --check frontend/api.js
+node --check frontend/examples.js
+node --check frontend/workspace.js
+node --check frontend/app.js
+```
+
+Start the site from the repository root with `python3 -m backend.api`, then
+open `http://127.0.0.1:8000/`. To force deterministic generation without model
+calls, set `MARKETPLACE_AI_MODE=offline`. For manual browser testing, set
+`MARKETPLACE_DB_PATH` and `MARKETPLACE_PORT` to isolate test data from the
+default ignored `data/marketplace.sqlite3` database.
 
 ## Intentional non-goals
 
