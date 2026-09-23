@@ -23,6 +23,7 @@
   let routeVersion = 0;
   let toastTimer;
   let modalReturnFocus;
+  let lastAuthenticatedId = null;
 
   function toast(message) {
     const target = document.getElementById('toast');
@@ -44,7 +45,10 @@
   function refreshNavigation() {
     const business = window.Api.getRole() === 'business';
     const link = document.getElementById('workspace-link');
-    document.getElementById('role-select').value = business ? 'business' : 'team';
+    const user = window.Api.getUser();
+    document.getElementById('account-button').textContent = user ? 'My account' : 'Sign in';
+    document.getElementById('account-role').textContent = user ? business ? 'Business' : 'Student' : '';
+    document.getElementById('account-role').hidden = !user;
     link.href = business ? '#workspace' : '#proposals';
     link.innerHTML = `${business ? 'My workspace' : 'My proposals'}<span class="nav-index">03</span>`;
     const hash = window.location.hash.replace(/^#\/?/, '').split('/')[0] || 'catalog';
@@ -187,8 +191,6 @@
     let id;
     try { id = decodeURIComponent(encodedId || ''); } catch (_) { id = ''; }
     if (dialog.open) closeModal();
-    if (['create','edit','workspace'].includes(name)) window.Api.setRole('business');
-    if (name === 'proposals') window.Api.setRole('team');
     refreshNavigation();
     document.querySelector('.main-nav').classList.remove('is-open');
     document.getElementById('mobile-menu').setAttribute('aria-expanded', 'false');
@@ -209,16 +211,43 @@
   });
   document.getElementById('close-dialog').addEventListener('click', closeModal);
   dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeModal(); } });
-  dialog.addEventListener('close', () => { if (modalReturnFocus?.isConnected) modalReturnFocus.focus({ preventScroll: true }); });
+  dialog.addEventListener('close', () => {
+    if (dialog.open) return;
+    dialog.querySelectorAll('input[autocomplete="current-password"], input[autocomplete="new-password"]').forEach(input => { input.value = ''; input.removeAttribute('value'); });
+    if (modalReturnFocus?.isConnected) modalReturnFocus.focus({ preventScroll: true });
+  });
   document.getElementById('mobile-menu').addEventListener('click', event => { const open = document.querySelector('.main-nav').classList.toggle('is-open'); event.currentTarget.setAttribute('aria-expanded', String(open)); event.currentTarget.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation'); });
-  document.getElementById('role-select').addEventListener('change', event => {
-    window.Api.setRole(event.target.value);
-    refreshNavigation();
-    const hash = window.location.hash;
-    if (/#\/?(workspace|proposals|edit|create)/.test(hash)) navigate(window.Api.getRole() === 'business' ? '#workspace' : '#proposals');
-    else if (/#\/?task\//.test(hash)) route();
+  document.getElementById('account-button').addEventListener('click', () => {
+    if (window.Api.getUser()) { window.Auth.showAccount(); return; }
+    const page = window.location.hash.replace(/^#\/?/, '').split('/')[0];
+    const preserveForm = ['create', 'edit'].includes(page) && !!root.querySelector('form');
+    window.Auth.show({ role: ['create', 'edit', 'workspace'].includes(page) ? 'business' : 'team', ...(preserveForm ? { afterSuccess: () => {} } : {}) });
   });
   window.addEventListener('hashchange', route);
-  window.addEventListener('profilechange', refreshNavigation);
-  route();
+  window.addEventListener('sessionchange', event => {
+    refreshNavigation();
+    const reason = event.detail?.reason;
+    const user = window.Api.getUser();
+    if (reason === 'logout') {
+      lastAuthenticatedId = null;
+      routeVersion++;
+      root.innerHTML = '<div class="loading-state" role="status">Signing out…</div>';
+      closeModal();
+      navigate('#catalog');
+    } else if (reason === 'switch') {
+      lastAuthenticatedId = null;
+      route();
+    } else if (reason === 'expired') {
+      toast('Your session has ended. Sign in again to continue.');
+    } else if (user) {
+      const changed = lastAuthenticatedId && lastAuthenticatedId !== user.id;
+      lastAuthenticatedId = user.id;
+      if (changed && /#\/?(workspace|proposals|edit)/.test(window.location.hash)) route();
+    }
+  });
+  (async () => {
+    try { await window.Api.initSession(); }
+    catch (_) { /* Public browsing still works when session restoration is unavailable. */ }
+    await route();
+  })();
 })();

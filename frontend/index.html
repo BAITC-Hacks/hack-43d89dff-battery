@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="styles.css">
   <script src="api.js" defer></script>
   <script src="examples.js" defer></script>
+  <script src="auth.js" defer></script>
   <script src="workspace.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -26,7 +27,8 @@
       <a href="#proposals" data-nav="workspace" id="workspace-link">My proposals<span class="nav-index">03</span></a>
     </nav>
     <div class="header-actions">
-      <label class="role-control"><span class="sr-only">Your role</span><select id="role-select"><option value="team">For students</option><option value="business">For business</option></select></label>
+      <span class="account-role" id="account-role" hidden></span>
+      <button type="button" class="btn account-button" id="account-button">Sign in</button>
       <a href="#create" class="btn btn-primary header-cta">Post a task <span aria-hidden="true">↗</span></a>
       <button type="button" id="mobile-menu" class="icon-btn mobile-menu" aria-label="Open navigation" aria-expanded="false"><span aria-hidden="true">☰</span></button>
     </div>

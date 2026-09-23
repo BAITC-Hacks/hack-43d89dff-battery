@@ -12,7 +12,9 @@ rankings—and never assigns a team automatically.
 - Required business confirmation before publishing.
 - Public catalog filtering by tag, industry, readiness, score, and text.
 - Team proposals and an explicit business accept/reject decision.
-- SQLite persistence and lightweight owner tokens for the MVP (not full auth).
+- Business and individual student accounts with email/password sign-in.
+- Linked business/team profiles, private workspaces, and revocable sessions.
+- SQLite persistence with automatic migration of existing marketplace data.
 - Responsive Swiss-style frontend with searchable task catalog, readiness and
   industry filters, business task editor, and student proposal workspace.
 
@@ -43,11 +45,27 @@ MARKETPLACE_PORT=8080 MARKETPLACE_AI_MODE=offline python3 -m backend.api
 are ignored by Git. Keep `OPENAI_API_KEY` only in the ignored `.env` file or
 environment; the API never returns it.
 
-The frontend keeps separate business and team owner profiles in browser local
-storage for this API origin. Switching roles keeps both profiles. Task and
-proposal changes are saved only through the real API; a disconnected server
-does not create local task data. If hosting the frontend separately, set
-`window.MARKETPLACE_API_BASE` to the API server origin before loading `api.js`.
+Choose **Sign in**, then **Create account**. Register as a business to post and
+manage tasks, or as a student to submit proposals through your team profile.
+Student credentials belong to an individual; the linked team profile supplies
+the team's name and contact details. Each account currently has one profile;
+joining existing teams and inviting additional members are future features.
+Account roles are fixed at registration. Sign out to use a different account.
+
+Passwords must contain 15–128 characters. Passwords are salted and hashed;
+sessions use an HttpOnly cookie and are valid for seven days. Sign-out revokes
+the current session. The browser keeps account information in memory and
+restores it from the server after a reload. Auth credentials are never written
+to local storage. Existing browser owner profiles can be linked during sign-up
+using their saved ownership proof, preserving their tasks/proposals.
+
+Task and proposal changes are saved only through the real API; a disconnected
+server does not create local task data. Same-origin hosting is the supported
+default. For HTTPS hosting, set `MARKETPLACE_COOKIE_SECURE=1`. Explicitly allowed
+same-site frontend origins can use `CORS_ORIGIN` and
+`window.MARKETPLACE_API_BASE`; wildcard credentialed CORS is not supported.
+Email verification, password recovery, invitations, and production deployment
+are not implemented.
 
 When the live catalog is empty or unavailable, the catalog displays clearly
 labeled fictional example briefs. They are read-only and never persisted.
@@ -68,30 +86,36 @@ business + draft
   -> manual business accept/reject
 ```
 
-Create a business or team first. Each creation response includes a one-time
-`owner_token`; save it and send it in `X-Owner-Token` for protected operations.
+Register or sign in first. Save the response's `profile.id` and `csrf_token`,
+and retain the session cookie. Mutations require JSON, an allowed `Origin`,
+and the session's `X-CSRF-Token`. Browsers send the cookie and Origin
+automatically. The example values below are placeholders, not real credentials.
 
 ```bash
-# 1. Create business; save id and owner_token from the response.
-curl -sS -X POST http://127.0.0.1:8000/api/businesses \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Acme","contact_name":"Aida","contact_email":"aida@example.test"}'
+# 1. Register a business account and retain its cookie.
+curl -sS -c /tmp/sana-cookies.txt http://127.0.0.1:8000/api/auth/register \
+  -H 'Origin: http://127.0.0.1:8000' -H 'Content-Type: application/json' \
+  -d '{"role":"business","name":"Aida","organization_name":"Acme","email":"aida@example.test","password":"REPLACE_WITH_YOUR_OWN_LONG_PASSWORD"}'
 
-# 2. Start a task. Returns clarification_questions.
+# 2. Start a task. Use profile.id and csrf_token from step 1.
 curl -sS -X POST http://127.0.0.1:8000/api/tasks \
-  -H 'Content-Type: application/json' -H 'X-Owner-Token: BUSINESS_TOKEN' \
+  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
+  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' \
   -d '{"business_id":"biz_...","initial_draft":"We manually triage support requests and miss urgent cases."}'
 
 # 3. Answer the generated questions, then inspect/edit card and score.
 curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../answers \
-  -H 'Content-Type: application/json' -H 'X-Owner-Token: BUSINESS_TOKEN' \
-  -d '{"task_summary":"Build a ticket-prioritization prototype.","answers":["Support agents","Anonymized tickets in a secure folder","A web prototype","80% accuracy verified against labelled tickets","No personal data; four weeks","Python and UX","Aida via weekly video calls"]}'
+  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
+  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' \
+  -d '{"task_summary":"Build a ticket-prioritization prototype.","answers":["Support agents need faster triage","Anonymized tickets in a secure folder","A web prototype","80% accuracy verified against labelled tickets","No personal data; four weeks; Aida via weekly video calls"]}'
 
 # 4. Confirm and publish. Low-scoring tasks are still eligible to publish.
 curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../confirm \
-  -H 'X-Owner-Token: BUSINESS_TOKEN'
+  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
+  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' -d '{}'
 curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../publish \
-  -H 'X-Owner-Token: BUSINESS_TOKEN'
+  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
+  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' -d '{}'
 
 # 5. Browse the public catalog.
 curl -sS 'http://127.0.0.1:8000/api/catalog?tags=support&readiness=ready'
@@ -101,8 +125,10 @@ curl -sS 'http://127.0.0.1:8000/api/catalog?tags=support&readiness=ready'
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/businesses` | Create a business and return its owner token. |
-| `POST` | `/api/teams` | Create a student team and return its owner token. |
+| `POST` | `/api/auth/register` | Create an individual account, linked profile, and session. |
+| `POST` | `/api/auth/login` | Sign in with email and password. |
+| `GET` | `/api/auth/session` | Restore current user/profile and CSRF token, or anonymous state. |
+| `POST` | `/api/auth/logout` | Revoke the current session and clear its cookie. |
 | `POST` | `/api/tasks` | Start a draft and get questions. |
 | `POST` | `/api/tasks/{id}/answers` | Generate a task card from answers. |
 | `PATCH` | `/api/tasks/{id}/card` | Edit card content; moves it back to `card_ready`. |
@@ -114,8 +140,12 @@ curl -sS 'http://127.0.0.1:8000/api/catalog?tags=support&readiness=ready'
 | `GET` | `/api/tasks/{id}/proposals` | Business reads proposals for its task. |
 | `PATCH` | `/api/proposals/{id}/decision` | Business explicitly accepts or rejects a proposal. |
 
-Protected endpoints use `X-Owner-Token`. The catalog is public. All responses
-and errors are JSON; validation errors use HTTP 422.
+Protected endpoints require a valid session cookie and enforce the account's
+role and profile ownership. `X-Owner-Token` is no longer accepted over HTTP;
+old profile creation endpoints return 410. The catalog stays public. Responses
+and errors are JSON: 401 for missing/expired authentication, 403 for forbidden
+access or failed request protection, 409 for conflicts, 422 for invalid input,
+and 429 for too many authentication attempts.
 
 ## Readiness formula
 
@@ -140,5 +170,6 @@ unscored criterion.
 python3 -B -m unittest discover -s tests -v
 ```
 
-The tests cover scoring boundaries, a complete card, owner-token enforcement,
-and the full draft-to-proposal workflow in a temporary SQLite database.
+The tests cover scoring, the complete draft-to-proposal workflow, account and
+session behavior, cross-account authorization, request protection, safe legacy
+profile linking, and migration of a previous-schema SQLite database.

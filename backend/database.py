@@ -76,6 +76,39 @@ CREATE INDEX IF NOT EXISTS idx_proposals_team ON proposals(team_id, created_at D
 """
 
 
+SCHEMA_VERSION = 1
+
+# Version zero is the original token-owned marketplace schema above. Execute
+# migrations statement by statement inside one IMMEDIATE transaction: SQLite's
+# executescript() would otherwise commit that transaction before applying DDL.
+MIGRATIONS = {
+    1: (
+        """CREATE TABLE accounts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('business', 'student')),
+            business_id TEXT UNIQUE REFERENCES businesses(id),
+            team_id TEXT UNIQUE REFERENCES teams(id),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            CHECK (
+                (role = 'business' AND business_id IS NOT NULL AND team_id IS NULL)
+                OR (role = 'student' AND team_id IS NOT NULL AND business_id IS NULL)
+            )
+        )""",
+        """CREATE TABLE sessions (
+            token_hash TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL CHECK (expires_at > created_at)
+        )""",
+        "CREATE INDEX idx_sessions_expiry ON sessions(expires_at)",
+        "CREATE INDEX idx_sessions_account ON sessions(account_id)",
+    ),
+}
+
+
 class Database:
     """Small connection factory with safe per-operation transactions."""
 
@@ -86,8 +119,24 @@ class Database:
         path = Path(self.path)
         if self.path != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
-        with self.read() as connection:
-            connection.executescript(SCHEMA)
+        with self.transaction() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError("This database requires a newer application version.")
+            # Check compatibility before any DDL. Keep baseline creation and
+            # all pending migrations in this same rollback-safe transaction.
+            statement = ""
+            for line in SCHEMA.splitlines(keepends=True):
+                statement += line
+                if sqlite3.complete_statement(statement):
+                    connection.execute(statement)
+                    statement = ""
+            if statement.strip():
+                raise RuntimeError("The database schema contains an incomplete statement.")
+            for next_version in range(version + 1, SCHEMA_VERSION + 1):
+                for statement in MIGRATIONS[next_version]:
+                    connection.execute(statement)
+                connection.execute(f"PRAGMA user_version = {next_version}")
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)

@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from .database import Database
@@ -49,6 +50,19 @@ class ServiceError(Exception):
         self.status = status
         self.code = code
         self.message = message
+
+
+@dataclass(frozen=True)
+class AuthPrincipal:
+    """An account identity resolved from a valid server-side session."""
+
+    account_id: str
+    role: str
+    business_id: str | None = None
+    team_id: str | None = None
+
+
+OwnerIdentity = AuthPrincipal | str | None
 
 
 class MarketplaceService:
@@ -129,7 +143,7 @@ class MarketplaceService:
     def create_task(
         self,
         payload: Mapping[str, Any],
-        owner_token: str | None,
+        owner_token: OwnerIdentity,
     ) -> dict[str, Any]:
         business_id = _required_text(payload, "business_id", maximum=80)
         initial_draft = _required_text(payload, "initial_draft", maximum=12000)
@@ -155,7 +169,7 @@ class MarketplaceService:
         self,
         task_id: str,
         payload: Mapping[str, Any],
-        owner_token: str | None,
+        owner_token: OwnerIdentity,
     ) -> dict[str, Any]:
         with self.database.read() as connection:
             row = self._task_row(connection, task_id)
@@ -202,7 +216,7 @@ class MarketplaceService:
         self,
         task_id: str,
         changes: Mapping[str, Any],
-        owner_token: str | None,
+        owner_token: OwnerIdentity,
     ) -> dict[str, Any]:
         if not isinstance(changes, Mapping) or not changes:
             raise ServiceError(422, "invalid_card_update", "Provide at least one card field to update.")
@@ -244,7 +258,7 @@ class MarketplaceService:
             updated = self._task_row(connection, task_id)
         return _task_view(updated, include_private=True)
 
-    def confirm_task(self, task_id: str, owner_token: str | None) -> dict[str, Any]:
+    def confirm_task(self, task_id: str, owner_token: OwnerIdentity) -> dict[str, Any]:
         with self.database.transaction() as connection:
             row = self._task_row(connection, task_id)
             self._require_business_owner(connection, row["business_id"], owner_token)
@@ -264,7 +278,7 @@ class MarketplaceService:
             updated = self._task_row(connection, task_id)
         return _task_view(updated, include_private=True)
 
-    def publish_task(self, task_id: str, owner_token: str | None) -> dict[str, Any]:
+    def publish_task(self, task_id: str, owner_token: OwnerIdentity) -> dict[str, Any]:
         with self.database.transaction() as connection:
             row = self._task_row(connection, task_id)
             self._require_business_owner(connection, row["business_id"], owner_token)
@@ -283,7 +297,7 @@ class MarketplaceService:
             updated = self._task_row(connection, task_id)
         return _task_view(updated, include_private=True)
 
-    def get_task(self, task_id: str, owner_token: str | None = None) -> dict[str, Any]:
+    def get_task(self, task_id: str, owner_token: OwnerIdentity = None) -> dict[str, Any]:
         with self.database.read() as connection:
             row = self._task_row(connection, task_id)
             is_owner = self._is_business_owner(connection, row["business_id"], owner_token)
@@ -291,7 +305,7 @@ class MarketplaceService:
             raise ServiceError(404, "task_not_found", "Task not found.")
         return _task_view(row, include_private=is_owner)
 
-    def list_business_tasks(self, business_id: str, owner_token: str | None) -> list[dict[str, Any]]:
+    def list_business_tasks(self, business_id: str, owner_token: OwnerIdentity) -> list[dict[str, Any]]:
         with self.database.read() as connection:
             self._require_business_owner(connection, business_id, owner_token)
             rows = connection.execute(
@@ -365,7 +379,7 @@ class MarketplaceService:
         self,
         task_id: str,
         payload: Mapping[str, Any],
-        owner_token: str | None,
+        owner_token: OwnerIdentity,
     ) -> dict[str, Any]:
         team_id = _required_text(payload, "team_id", maximum=80)
         message = _required_text(payload, "message", maximum=5000)
@@ -392,7 +406,7 @@ class MarketplaceService:
             row = self._proposal_row(connection, proposal_id)
         return _proposal_view(row, include_team=False)
 
-    def list_task_proposals(self, task_id: str, owner_token: str | None) -> list[dict[str, Any]]:
+    def list_task_proposals(self, task_id: str, owner_token: OwnerIdentity) -> list[dict[str, Any]]:
         with self.database.read() as connection:
             task = self._task_row(connection, task_id)
             self._require_business_owner(connection, task["business_id"], owner_token)
@@ -405,7 +419,7 @@ class MarketplaceService:
             ).fetchall()
         return [_proposal_view(row, include_team=True) for row in rows]
 
-    def list_team_proposals(self, team_id: str, owner_token: str | None) -> list[dict[str, Any]]:
+    def list_team_proposals(self, team_id: str, owner_token: OwnerIdentity) -> list[dict[str, Any]]:
         with self.database.read() as connection:
             self._require_team_owner(connection, team_id, owner_token)
             rows = connection.execute(
@@ -419,7 +433,7 @@ class MarketplaceService:
         self,
         proposal_id: str,
         decision: str,
-        owner_token: str | None,
+        owner_token: OwnerIdentity,
     ) -> dict[str, Any]:
         if decision not in {"accepted", "rejected"}:
             raise ServiceError(422, "invalid_decision", "decision must be accepted or rejected")
@@ -501,32 +515,56 @@ class MarketplaceService:
         return row
 
     def _require_business_owner(
-        self, connection: sqlite3.Connection, business_id: str, owner_token: str | None
+        self, connection: sqlite3.Connection, business_id: str, owner_token: OwnerIdentity
     ) -> sqlite3.Row:
         row = connection.execute("SELECT * FROM businesses WHERE id = ?", (business_id,)).fetchone()
         if not row:
             raise ServiceError(404, "business_not_found", "Business not found.")
-        if not _token_matches(owner_token, row["owner_token_hash"]):
-            raise ServiceError(403, "forbidden", "A valid business owner token is required.")
+        if not _profile_owner_matches(connection, "business", row, owner_token):
+            raise ServiceError(403, "forbidden", "This business belongs to another account.")
         return row
 
     def _is_business_owner(
-        self, connection: sqlite3.Connection, business_id: str, owner_token: str | None
+        self, connection: sqlite3.Connection, business_id: str, owner_token: OwnerIdentity
     ) -> bool:
         row = connection.execute(
-            "SELECT owner_token_hash FROM businesses WHERE id = ?", (business_id,)
+            "SELECT id, owner_token_hash FROM businesses WHERE id = ?", (business_id,)
         ).fetchone()
-        return bool(row and _token_matches(owner_token, row["owner_token_hash"]))
+        return bool(row and _profile_owner_matches(connection, "business", row, owner_token))
 
     def _require_team_owner(
-        self, connection: sqlite3.Connection, team_id: str, owner_token: str | None
+        self, connection: sqlite3.Connection, team_id: str, owner_token: OwnerIdentity
     ) -> sqlite3.Row:
         row = connection.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
         if not row:
             raise ServiceError(404, "team_not_found", "Team not found.")
-        if not _token_matches(owner_token, row["owner_token_hash"]):
-            raise ServiceError(403, "forbidden", "A valid team owner token is required.")
+        if not _profile_owner_matches(connection, "student", row, owner_token):
+            raise ServiceError(403, "forbidden", "This team belongs to another account.")
         return row
+
+
+def _profile_owner_matches(
+    connection: sqlite3.Connection,
+    role: str,
+    profile: sqlite3.Row,
+    identity: OwnerIdentity,
+) -> bool:
+    # Column names are fixed application constants, never caller input.
+    column = "business_id" if role == "business" else "team_id"
+    account = connection.execute(
+        f"SELECT id, role FROM accounts WHERE {column} = ?", (profile["id"],)
+    ).fetchone()
+    if isinstance(identity, AuthPrincipal):
+        linked_id = identity.business_id if role == "business" else identity.team_id
+        return bool(
+            account
+            and identity.role == role == account["role"]
+            and identity.account_id == account["id"]
+            and linked_id == profile["id"]
+        )
+    # Direct service callers can still manage unclaimed legacy profiles. A
+    # linked account permanently disables the legacy token authorization path.
+    return not account and _token_matches(identity, profile["owner_token_hash"])
 
 
 def _business_view(row: sqlite3.Row) -> dict[str, Any]:
@@ -612,7 +650,7 @@ def _token_hash(token: str) -> str:
 
 
 def _token_matches(token: str | None, stored_hash: str) -> bool:
-    return bool(token and hmac.compare_digest(_token_hash(token), stored_hash))
+    return bool(isinstance(token, str) and token and hmac.compare_digest(_token_hash(token), stored_hash))
 
 
 def _dump(value: Any) -> str:

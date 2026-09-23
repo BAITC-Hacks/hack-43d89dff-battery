@@ -4,6 +4,7 @@
 
     let renderVersion = 0;
     window.addEventListener('hashchange', () => { renderVersion += 1; });
+    window.addEventListener('sessionchange', event => { if (['logout', 'switch'].includes(event.detail?.reason)) renderVersion += 1; });
     const e = value => window.UI.escape(value == null ? '' : String(value));
     const list = value => Array.isArray(value) ? value : [];
     const lines = value => String(value || '').split('\n').map(item => item.trim()).filter(Boolean);
@@ -32,7 +33,15 @@
         controls.forEach(([control]) => { control.disabled = true; });
         if (button) button.textContent = label;
         try { await action(); }
-        catch (error) { formError(form, error.message || 'Something went wrong. Please try again.'); }
+        catch (error) {
+            formError(form, error.message || 'Something went wrong. Please try again.');
+            if ((error.status === 401 || error.code === 'authentication_required') && form.isConnected && !form.closest('dialog')) {
+                window.Auth.require('business', () => {
+                    if (form.isConnected) formError(form, '');
+                    window.UI.toast('Signed in. Your changes are still here; try the action again.');
+                });
+            }
+        }
         finally {
             delete form.dataset.busy;
             form.removeAttribute('aria-busy');
@@ -40,49 +49,30 @@
             if (button) button.innerHTML = previous;
         }
     }
-    function refreshProfile() {
-        window.UI.refreshNavigation?.();
-        window.dispatchEvent(new CustomEvent('profilechange'));
-    }
-    function showProfile(role = window.Api.getRole(), afterSave) {
-        const business = role === 'business';
-        const existing = window.Api.getProfile(role);
-        if (existing) {
-            const dialog = window.UI.modal(business ? 'Business profile' : 'Team profile', `<div class="stack"><p class="eyebrow">${business ? 'BUSINESS' : 'STUDENT TEAM'}</p><h3 class="panel-title">${e(existing.name)}</h3>${existing.contact_email ? `<p>${e(existing.contact_email)}</p>` : ''}${existing.description ? `<p class="muted">${e(existing.description)}</p>` : ''}<p class="muted">Your workspace access is saved in this browser.</p><button class="btn btn-primary" type="button" data-continue>Continue ${window.UI.icon('arrow')}</button></div>`);
-            dialog.querySelector('[data-continue]').addEventListener('click', () => { window.Api.setRole(role); refreshProfile(); window.UI.closeModal(); afterSave?.(existing); });
-            return;
-        }
-        const dialog = window.UI.modal(business ? 'Introduce your business.' : 'Meet your team.', `<form class="stack" id="profile-form"><p class="muted">${business ? 'Create a workspace to turn a business challenge into a clear task.' : 'Create a team profile to send proposals to businesses.'}</p><div class="form-grid">${field(business ? 'Business name' : 'Team name', 'name', '', { required: true, max: 160, wide: true, placeholder: business ? 'Your organization' : 'Your team name' })}${business ? field('Contact name', 'contact_name', '', { optional: true, max: 160 }) : ''}${field('Contact email', 'contact_email', '', { type: 'email', required: !business, optional: business, max: 320, wide: !business })}${!business ? field('Team skills', 'skills', '', { wide: true, optional: true, hint: 'Separate skills with commas.', placeholder: 'Research, data analysis, design' }) : ''}${field(business ? 'About your business' : 'About your team', 'description', '', { area: true, wide: true, optional: true, max: 2000 })}</div><p class="muted">Access is saved on this device. Use this browser to return to your ${business ? 'tasks' : 'proposals'}.</p>${errorBox()}<button class="btn btn-primary" type="submit">Create ${business ? 'workspace' : 'team'} ${window.UI.icon('arrow')}</button></form>`);
-        const form = dialog.querySelector('form');
-        form.addEventListener('submit', async event => {
-            event.preventDefault();
-            const data = new FormData(form);
-            const payload = { name: data.get('name').trim(), contact_email: data.get('contact_email').trim() || null, description: data.get('description').trim() || null };
-            if (business) payload.contact_name = data.get('contact_name').trim() || null;
-            else payload.skills = words(data.get('skills'));
-            await busy(form, form.querySelector('[type="submit"]'), 'Creating…', async () => {
-                const profile = business ? await window.Api.createBusiness(payload) : await window.Api.createTeam(payload);
-                window.Api.setRole(role);
-                refreshProfile();
-                const stillOpen = dialog.open && form.isConnected;
-                if (stillOpen) window.UI.closeModal();
-                window.UI.toast(business ? 'Your business workspace is ready.' : 'Your team profile is ready.');
-                if (stillOpen) afterSave?.(profile);
-            });
-        });
+    function showProfile(role = window.Api.getRole() || 'team', afterSave) {
+        window.Auth.require(role, afterSave);
     }
 
     async function render(root, route, id) {
         const version = ++renderVersion;
         const current = () => version === renderVersion && root.isConnected;
+        const requiredRole = route === 'proposals' ? 'team' : 'business';
+        const showGate = () => window.Auth.renderGate(root, requiredRole, () => render(root, route, id));
         root.innerHTML = '<div class="empty-state" role="status"><p class="eyebrow">YOUR WORKSPACE</p><h2>Loading…</h2></div>';
         try {
+            if (window.Api.getUser() && window.Api.getRole() !== requiredRole || route !== 'create' && !window.Api.getUser()) {
+                showGate();
+                return;
+            }
             if (route === 'create') { renderCreate(root); return; }
             if (route === 'workspace') {
                 const profile = window.Api.getProfile('business');
-                if (!profile) { renderWelcome(root, 'business'); return; }
+                if (!profile) throw new Error('Your account has no linked business profile. Sign out and sign in again.');
                 const tasks = await window.Api.getBusinessTasks();
-                if (current()) renderTaskList(root, tasks, profile);
+                if (current()) {
+                    if (!window.Api.getUser()) showGate();
+                    else renderTaskList(root, tasks, profile);
+                }
             } else if (route === 'edit') {
                 const task = await window.Api.getTask(id);
                 if (!current()) return;
@@ -91,37 +81,42 @@
                 renderOwnedTask(root, task);
             } else if (route === 'proposals') {
                 const profile = window.Api.getProfile('team');
-                if (!profile) { renderWelcome(root, 'team'); return; }
+                if (!profile) throw new Error('Your account has no linked team profile. Sign out and sign in again.');
                 const proposals = await window.Api.getTeamProposals();
-                if (current()) await renderTeamProposals(root, proposals, current);
+                if (current()) {
+                    if (!window.Api.getUser()) showGate();
+                    else await renderTeamProposals(root, proposals, current);
+                }
             }
         } catch (error) {
             if (!current()) return;
+            if (error.status === 401 || !window.Api.getUser()) { showGate(); return; }
             root.innerHTML = `${heading('02', 'Let’s try again.', 'Your work stays with your workspace.')}<section class="panel stack"><p class="error-message" role="alert">${e(error.message)}</p><div class="inline-actions"><button class="btn btn-primary" data-retry>Try again</button><a class="btn" href="#catalog">Explore tasks</a></div></section>`;
             root.querySelector('[data-retry]').addEventListener('click', () => render(root, route, id));
         }
     }
-    function renderWelcome(root, role) {
-        const business = role === 'business';
-        root.innerHTML = `${heading('02', business ? 'Ideas into action.' : 'Your next step.', business ? 'A focused brief is the start of a useful collaboration.' : 'Real challenges. Thoughtful proposals. New possibilities.')}<section class="panel empty-state"><p class="eyebrow">${business ? 'BUSINESS WORKSPACE' : 'TEAM WORKSPACE'}</p><h2>${business ? 'Start with a challenge.' : 'Make room for your team.'}</h2><p class="muted">${business ? 'Describe your task, clarify the details, and choose the team you want to work with.' : 'Create a team profile to keep track of every proposal and the business’s decision.'}</p><button class="btn btn-primary" data-profile>Create ${business ? 'workspace' : 'team profile'} ${window.UI.icon('arrow')}</button></section>`;
-        root.querySelector('[data-profile]').addEventListener('click', () => showProfile(role, () => render(root, business ? 'workspace' : 'proposals')));
-    }
-    function renderCreate(root) {
+    function renderCreate(root, initialDraft = '') {
         root.innerHTML = `${heading('02', 'Start with a problem.', 'You bring the challenge. We help you make it clear.')} ${steps(0)}<div class="workspace-layout"><section class="panel"><form class="stack" id="draft-form"><div><p class="eyebrow">01 / THE STARTING POINT</p><h2 class="panel-title">What could work better?</h2><p class="muted">Describe the problem in your own words. Kazakh, Russian, English, or a mix — all welcome.</p></div>${field('Your business challenge', 'initial_draft', '', { area: true, rows: 9, required: true, max: 12000, placeholder: 'We run a local business, and we want to improve…' })}<div class="data-row"><span class="muted">A rough idea is enough to begin.</span><span class="muted" data-count>0 / 12,000</span></div>${errorBox()}<div class="form-actions"><button class="btn btn-primary" type="submit">Clarify my task ${window.UI.icon('arrow')}</button><a class="text-link" href="#workspace">Back to workspace</a></div></form></section><aside class="panel stack"><p class="eyebrow">A CLEARER PATH</p><h2 class="panel-title">Small details.<br>Better outcomes.</h2><div class="detail-section"><h3>01 / Describe</h3><p class="muted">Start with the issue your business needs to solve.</p></div><div class="detail-section"><h3>02 / Clarify</h3><p class="muted">Answer a few focused questions to fill in the gaps.</p></div><div class="detail-section"><h3>03 / Review & publish</h3><p class="muted">Edit your task card, check its readiness, then publish when you choose.</p></div><p class="muted">You review every proposal and choose your team.</p></aside></div>`;
         const form = root.querySelector('form');
         const draft = form.elements.initial_draft;
+        draft.value = initialDraft;
+        form.querySelector('[data-count]').textContent = `${draft.value.length.toLocaleString()} / 12,000`;
         draft.addEventListener('input', () => { form.querySelector('[data-count]').textContent = `${draft.value.length.toLocaleString()} / 12,000`; });
         form.addEventListener('submit', event => {
             event.preventDefault();
             if (!draft.value.trim()) { formError(form, 'Describe your challenge before continuing.'); draft.focus(); return; }
             const create = () => busy(form, form.querySelector('[type="submit"]'), 'Preparing your questions…', async () => {
-                window.Api.setRole('business');
-                refreshProfile();
                 const task = await window.Api.createTask(draft.value.trim());
                 if (form.isConnected) window.UI.navigate(`#edit/${encodeURIComponent(task.id)}`);
             });
-            if (!window.Api.getProfile('business')) showProfile('business', create);
-            else create();
+            const savedDraft = draft.value;
+            window.Auth.require('business', () => {
+                if (form.isConnected) create();
+                else if (/^#\/?create$/.test(window.location.hash)) {
+                    renderCreate(root, savedDraft);
+                    root.querySelector('#draft-form').requestSubmit();
+                }
+            });
         });
     }
     function renderTaskList(root, tasks, profile) {
@@ -259,12 +254,10 @@
             container.querySelector('[data-retry]').addEventListener('click', () => renderProposalReview(container, task));
         }
     }
-    function showProposal(task) {
+    function showProposal(task, draftValues = {}) {
         if (task.is_example) { window.UI.toast('This is an example task. Proposals are available for published business tasks.'); return; }
-        if (!window.Api.getProfile('team')) { showProfile('team', () => showProposal(task)); return; }
-        window.Api.setRole('team');
-        refreshProfile();
-        const dialog = window.UI.modal('Make your first move.', `<form class="stack"><div><p class="eyebrow">YOUR PROPOSAL</p><h3 class="panel-title">${e(task.card?.title || 'Business task')}</h3><p class="muted">From ${e(window.Api.getProfile('team').name)}. The business reviews every proposal and makes the decision.</p></div>${field('Why is your team a good fit?', 'message', '', { area: true, required: true, max: 5000, placeholder: 'Introduce your team and what you bring to this challenge.' })}${field('How would you approach the task?', 'approach', '', { area: true, rows: 4, required: true, max: 8000, placeholder: 'Outline your first steps, process, and intended outcome.' })}${field('Estimated timeline', 'estimated_timeline', '', { optional: true, max: 500, placeholder: 'e.g. An initial prototype in three weeks' })}${field('Portfolio links', 'portfolio_links', '', { area: true, rows: 2, optional: true, hint: 'One full https:// link per line. Up to 10 links.' })}${errorBox()}<button class="btn btn-primary" type="submit">Send proposal ${window.UI.icon('arrow')}</button></form>`);
+        if (!window.Api.getProfile('team')) { showProfile('team', () => showProposal(task, draftValues)); return; }
+        const dialog = window.UI.modal('Make your first move.', `<form class="stack"><div><p class="eyebrow">YOUR PROPOSAL</p><h3 class="panel-title">${e(task.card?.title || 'Business task')}</h3><p class="muted">From ${e(window.Api.getProfile('team').name)}. The business reviews every proposal and makes the decision.</p></div>${field('Why is your team a good fit?', 'message', draftValues.message || '', { area: true, required: true, max: 5000, placeholder: 'Introduce your team and what you bring to this challenge.' })}${field('How would you approach the task?', 'approach', draftValues.approach || '', { area: true, rows: 4, required: true, max: 8000, placeholder: 'Outline your first steps, process, and intended outcome.' })}${field('Estimated timeline', 'estimated_timeline', draftValues.estimated_timeline || '', { optional: true, max: 500, placeholder: 'e.g. An initial prototype in three weeks' })}${field('Portfolio links', 'portfolio_links', list(draftValues.portfolio_links).join('\n'), { area: true, rows: 2, optional: true, hint: 'One full https:// link per line. Up to 10 links.' })}${errorBox()}<button class="btn btn-primary" type="submit">Send proposal ${window.UI.icon('arrow')}</button></form>`);
         const form = dialog.querySelector('form');
         form.addEventListener('submit', event => {
             event.preventDefault();
@@ -274,7 +267,13 @@
             const payload = { message: data.get('message').trim(), approach: data.get('approach').trim(), estimated_timeline: data.get('estimated_timeline').trim() || null, portfolio_links: links };
             if (!payload.message || !payload.approach) { formError(form, 'Tell the business why your team is a good fit and how you would approach the task.'); return; }
             busy(form, form.querySelector('[type="submit"]'), 'Sending proposal…', async () => {
-                await window.Api.submitProposal(task.id, payload);
+                try { await window.Api.submitProposal(task.id, payload); }
+                catch (error) {
+                    if ((error.status === 401 || error.code === 'authentication_required') && dialog.open && form.isConnected) {
+                        window.Auth.require('team', () => showProposal(task, payload));
+                    }
+                    throw error;
+                }
                 const stillOpen = dialog.open && form.isConnected;
                 if (stillOpen) window.UI.closeModal();
                 window.UI.toast('Proposal sent. The business will review your approach.');

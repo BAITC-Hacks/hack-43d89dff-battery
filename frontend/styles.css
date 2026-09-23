@@ -39,7 +39,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .main-nav a:hover::after, .main-nav a[aria-current="page"]::after { transform: scaleX(1); }
 .nav-index { font-size: 9px; color: var(--secondary); align-self: center; margin-top: -13px; }
 .header-actions { display: flex; gap: 22px; align-items: center; }
-.role-control select { appearance: none; border: none; background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='black' stroke-width='1.5'%3E%3Cpath d='m3 5 3 3 3-3'/%3E%3C/svg%3E") no-repeat right center; padding: 12px 20px 12px 0; font-size: 12px; font-weight: 600; }
 .btn { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; gap: 28px; padding: 13px 22px; border: 2px solid var(--ink); background: var(--paper); font-size: 11px; line-height: 1.3; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; transition: background var(--transition), color var(--transition), border-color var(--transition); }
 .btn:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
 .btn-primary { background: var(--ink); color: var(--paper); }
@@ -266,7 +265,6 @@ dialog::backdrop { background: rgb(0 0 0 / 60%); }
   .site-header { min-height: 78px; gap: 0; border-bottom-width: 3px; }
   .wordmark { font-size: 34px; }
   .header-actions { gap: 13px; }
-  .role-control select { font-size: 11px; }
   .header-cta { display: none; }
   .mobile-menu { display: inline-flex; border: 0; width: 36px; }
   .main-nav { display: none; margin: 0; height: auto; flex-direction: column; padding-bottom: 15px; }
@@ -381,3 +379,26 @@ dialog::backdrop { background: rgb(0 0 0 / 60%); }
 }
 /* Programmatic route focus should not outline the entire page. */
 #main-content:focus, .page-title:focus { outline: none; }
+/* Account access follows the same square controls and visible grid. */
+.account-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.account-button { white-space: nowrap; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); }
+.auth-tabs button { min-height: 48px; border: 0; background: var(--paper); color: var(--ink); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; }
+.auth-tabs button + button { border-left: 1px solid var(--ink); }
+.auth-tabs button[aria-pressed="true"], .auth-tabs button:hover { background: var(--ink); color: var(--paper); }
+.auth-role { border: 0; padding: 0; margin: 0; display: flex; gap: 12px; }
+.auth-role legend { font-size: 11px; font-weight: 600; margin-bottom: 10px; }
+.auth-role label { display: flex; align-items: center; gap: 9px; min-height: 48px; border: 1px solid var(--ink); padding: 10px 16px; flex: 1; cursor: pointer; font-size: 12px; }
+.auth-role label:has(input:checked) { border-width: 2px; background: var(--muted); padding: 9px 15px; }
+.auth-role input { accent-color: var(--ink); }
+.auth-legacy { padding: 16px; background: var(--muted); }
+.auth-gate { margin-bottom: 60px; }
+.auth-form .form-grid { gap: 20px; }
+.auth-form > .muted { font-size: 12px; }
+@media (max-width: 1100px) { .account-role { display: none; } }
+@media (max-width: 767px) {
+  .account-button { min-height: 44px; padding: 10px 12px; font-size: 9px; }
+  .auth-gate .inline-actions { align-items: stretch; flex-direction: column; }
+  .auth-gate .btn { width: 100%; }
+  .auth-tabs button, .auth-role label { min-height: 48px; }
+}

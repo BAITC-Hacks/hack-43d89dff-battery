@@ -10,8 +10,9 @@ The central gamification target is the **business task's readiness**, not compan
 
 This is a small, dependency-free hackathon MVP, not a production platform.
 Keep changes focused on making this workflow clearer and more reliable. Do not
-add a new framework, package manager, authentication system, or external
-service unless the product is explicitly reprioritized. Read the code and its
+add a new framework, package manager, or external service unless the product
+is explicitly reprioritized. Business/student authentication was explicitly
+requested and is now part of the MVP. Read the code and its
 tests before extending a behavior described here; the implementation and tests
 are the source of truth if they differ from this document.
 
@@ -47,7 +48,8 @@ exists.
 │   ├── index.html
 │   ├── styles.css
 │   ├── app.js                    # Shared UI helpers, hash router, catalog, public details
-│   ├── api.js                    # Same-origin fetch adapter and browser-held owner profiles
+│   ├── api.js                    # Cookie API adapter and in-memory account/session state
+│   ├── auth.js                   # Sign-up/sign-in, role gates, account and sign-out UI
 │   ├── workspace.js              # Business workflow and team proposal workflow
 │   ├── examples.js               # Fictional, read-only briefs for an empty/unavailable catalog
 │   └── favicon.svg
@@ -55,6 +57,7 @@ exists.
 │   ├── api.py                   # Canonical JSON API and allowlisted frontend asset server
 │   ├── server.py                # Compatibility launcher that delegates to backend.api
 │   ├── service.py               # Marketplace workflow, state rules, authorization
+│   ├── auth.py                  # Accounts, password hashing, sessions, legacy profile linking
 │   ├── database.py              # SQLite schema, reads, and transactions
 │   └── models/
 │       ├── generateQuestions.py # Question generation (provider and offline paths)
@@ -64,7 +67,9 @@ exists.
     ├── test_marketplace_workflow.py
     ├── test_evaluate_task_card.py
     ├── test_model_boundaries.py
-    └── test_http_api.py
+    ├── test_http_api.py
+    ├── test_auth.py
+    └── fixtures/legacy_schema.sql # Frozen pre-account schema for migration coverage
 ```
 
 `python3 -m backend.api` is the canonical application entry point. It serves
@@ -78,13 +83,13 @@ database files through static serving.
 ## Frontend architecture and routes
 
 The browser code is ordinary scripts loaded in this order from `index.html`:
-`api.js`, `examples.js`, `workspace.js`, then `app.js`. There is no bundler,
+`api.js`, `examples.js`, `auth.js`, `workspace.js`, then `app.js`. There is no bundler,
 framework, CSS utility library, or component package. Keep this order when
 adding globals; do not introduce module imports unless the page and server
 serving rules are intentionally updated together.
 
-- `index.html` owns the semantic page shell: header and navigation, role
-  selector, main root (`#app-root`), footer, one shared native `<dialog>`, and
+- `index.html` owns the semantic page shell: header and navigation, account
+  controls, main root (`#app-root`), footer, one shared native `<dialog>`, and
   a live-region toast.
 - `app.js` owns the `#` hash router and catalog, public task details, the
   “how it works” and readiness pages, and the shared `window.UI` helpers
@@ -95,14 +100,23 @@ serving rules are intentionally updated together.
   navigation behavior, and mobile navigation behavior together.
 - `workspace.js` exposes `window.Workspace.render(root, route, id)` for the
   business draft/questions/card/publish workflow and the two proposal views.
-  `showProfile(role, afterSave)` handles the separate business/team setup
-  dialog; `showProposal(task)` handles student submission. Keep workflow and
+  `showProfile(role, afterSave)` delegates to account onboarding;
+  `showProposal(task)` handles student submission. Keep workflow and
   form logic here rather than adding it to HTTP route code.
-- `api.js` exposes `window.Api`. It translates browser actions to the existing
-  REST API and holds the two MVP owner profiles separately in local storage,
-  keyed by API origin and role. The raw owner token is returned once by profile
-  creation and kept on that device. This is a prototype convenience, not secure
-  production account storage or multi-device sign-in.
+- `api.js` exposes `window.Api`. It translates browser actions to the REST API,
+  includes the HttpOnly session cookie and `X-CSRF-Token` on mutations, and
+  holds the user/profile/CSRF response in memory. `initSession()` restores it
+  before initial routing. `getUser()` returns the individual account;
+  `getProfile(role)` returns only the linked profile for the authenticated role.
+  Account role `student` maps to the existing workflow role `team`.
+  `register`, `login`, and `logout` update session state. New credentials must
+  never be written to local storage. Old origin-keyed owner profiles are read
+  only to offer explicit proof-based linking during registration.
+- `auth.js` exposes `window.Auth`: `show`, `require(role, callback)`,
+  `renderGate(root, role, resume)`, and `showAccount`. It owns account forms,
+  validation, role conflicts, and account controls. A role selector changes
+  registration intent only; it must never change the signed-in account's role.
+  Preserve form input when onboarding interrupts a draft or proposal action.
 - `examples.js` provides explicitly fictional, read-only catalog examples.
   Examples are marked `is_example`, are not returned by the server, and must
   never be submitted, published, or written into the SQLite database.
@@ -156,13 +170,13 @@ Proposal: {id, task_id, team_id, message, approach, estimated_timeline,
 
 `GET /api/catalog` and `GET /api/catalog/{id}` are public. `GET /api/tasks/{id}`
 is owner-aware: it returns owner-only draft, question, answer, and confirmation
-fields only when called with the owning business token. Keep the UI aligned
-with the service's response shape and with the role-specific headers in
-`api.js`.
+fields only when called with the owning business session. Keep the UI aligned
+with the service's response shape and session handling in `api.js`.
 
 ## Persistence schema
 
-`Database.initialize()` idempotently creates tables. Use `Database.read()` for
+`Database.initialize()` idempotently creates base tables and applies versioned
+migrations using `PRAGMA user_version` (current version 1). Use `Database.read()` for
 reads and `Database.transaction()` for writes. Transactions use `BEGIN
 IMMEDIATE`, foreign keys, rollback on error, and connection close.
 
@@ -172,6 +186,14 @@ IMMEDIATE`, foreign keys, rollback on error, and connection close.
 | `teams` | Team profile, `skills_json`, contact and `owner_token_hash`. |
 | `tasks` | Raw draft, question/answer JSON, card/evaluation JSON, status/timestamps, FK business. |
 | `proposals` | FK task/team, proposal text, links/status/timestamps; one team per task once. |
+| `accounts` | Individual name, unique normalized email, password hash, immutable business/student role, matching business/team FK. |
+| `sessions` | SHA-256 token hash, account FK, creation and expiry timestamps. Raw cookies are never persisted. |
+
+An individual student account is linked to one team profile for proposal
+identity; business accounts link to one business profile. The current schema
+allows one account per profile. Team membership, invitations, profile editing,
+and changing an account's role are not implemented. Do not infer that a team
+name grants another student membership or access to an existing team's data.
 
 `tasks.status` is exactly `awaiting_answers`, `card_ready`, `confirmed`, or
 `published`.
@@ -195,19 +217,43 @@ IF NOT EXISTS` does not alter existing SQLite tables.
 
 ## Authorization and visibility
 
-This is MVP authorization, not full production identity:
+Accounts and sessions use only the standard library:
 
-- Business/team creation returns a high-entropy `owner_token` exactly once.
-- Only its SHA-256 hash is persisted.
-- Protected calls use raw `X-Owner-Token`.
-- A business token owns task creation, edits, confirmation, publication,
+- Register with `role` (`business` or `student`), individual `name`, `email`,
+  and `password`; business profiles use `organization_name`, student profiles
+  use `team_name`. Each student signs in with individual credentials.
+- Passwords are 15–128 characters, salted and hashed with PBKDF2-HMAC-SHA256
+  (600,000 iterations). Preserve password whitespace and never log passwords.
+- Sessions last seven days and use the `sana_session` cookie with HttpOnly,
+  SameSite=Lax, Path=/. Set `MARKETPLACE_COOKIE_SECURE=1` when serving HTTPS.
+  Only a SHA-256 hash is stored. Logout deletes the current server session.
+- `GET /api/auth/session` returns `{user, profile, csrf_token, expires_at}`;
+  anonymous values are null. `user` contains id/name/email/role. Register/login
+  return this shape and set the cookie. Never return raw session tokens.
+- Mutations require JSON and an allowed Origin. Session-authenticated mutations
+  also require `X-CSRF-Token` derived from the current session token. Default
+  access is same-origin; `CORS_ORIGIN` can allow one exact frontend origin.
+  Never enable wildcard credentialed CORS or trust arbitrary forwarded hosts.
+- `AuthService.authenticate` supplies an internal `AuthPrincipal` to the
+  existing marketplace ownership arguments. Authorization is enforced in
+  `MarketplaceService`, including both role and linked profile id.
+- A business account owns task creation, edits, confirmation, publication,
   proposal review, and proposal decision.
-- A team token owns proposal submission and its own proposal list.
+- A student account owns proposal submission and its own team's proposal list.
 - Public viewers see only published tasks. They never receive drafts, answers,
   tokens, or owner-only metadata.
 
-Do not return tokens from read/list endpoints or weaken the separate business
-and team ownership checks.
+`POST /api/businesses` and `/api/teams` are retired (410). `X-Owner-Token` does
+not authorize HTTP requests. Legacy profile creation/raw-token support remains
+in the Python service for compatibility and tests, limited to unclaimed
+profiles. Registration can claim a legacy profile using both
+`legacy_profile_id` and `legacy_owner_token`; the server verifies ownership,
+links it atomically, and rotates its old token hash. Never claim by email or
+name alone. Migration preserves old task/proposal ids and relationships.
+
+Auth attempts are bounded by an in-process per-client rate limiter. This MVP
+does not include email verification, password recovery, multi-worker shared
+rate limiting, or team invitations. Do not imply these already exist.
 
 ## HTTP API
 
@@ -217,12 +263,14 @@ Bodies/responses are JSON. Error shape:
 {"error": {"code": "validation_error", "message": "..."}}
 ```
 
-| Method | Endpoint | Body / behavior | Token |
+| Method | Endpoint | Body / behavior | Session role |
 | --- | --- | --- | --- |
 | `GET` | `/health` | Liveness. | No |
 | `GET` | `/api/meta/readiness` | Weights and levels. | No |
-| `POST` | `/api/businesses` | `name` required; profile/contact optional. | No |
-| `POST` | `/api/teams` | `name`, `contact_email` required; description/skills optional. | No |
+| `POST` | `/api/auth/register` | Individual account + linked business/team profile. | No |
+| `POST` | `/api/auth/login` | `email`, `password`; sets session cookie. | No |
+| `GET` | `/api/auth/session` | Safe current account/profile and CSRF token, or anonymous. | Optional |
+| `POST` | `/api/auth/logout` | Revokes session; clears cookie. | Optional; CSRF if authenticated |
 | `POST` | `/api/tasks` | `business_id`, `initial_draft`; returns questions. | Business |
 | `POST` | `/api/tasks/{id}/answers` | `answers` list of 3+; optional `task_summary`. | Business |
 | `PATCH` | `/api/tasks/{id}/card` | Partial editable-card patch. | Business |
@@ -243,8 +291,10 @@ Catalog filters: `tags` (CSV, all must match, case-insensitive), `industry`,
 then latest publication. Filtering currently happens in Python after published
 rows are read, which is intentional for MVP scale.
 
-Expected errors: `422` invalid input, `403` invalid ownership, `404` missing or
-private resource, `409` invalid state/duplicate, `502` generation failure.
+Expected errors: `401` missing/expired authentication or invalid login, `422`
+invalid input, `403` invalid ownership/Origin/CSRF, `404` missing or private
+resource, `409` invalid state/duplicate email, `429` authentication rate limit,
+`502` generation failure.
 
 ## Task-card contract
 
@@ -390,8 +440,8 @@ private draft/answer contents in diagnostics.
 For a browser feature, update `index.html` script order only if a new global
 script is necessary. Use `window.Api` for real data and mutations, `window.UI`
 for shared controls and rendering helpers, and `window.Workspace` for existing
-business/team flows. Preserve separate business and team owner tokens, send
-tokens only to the matching protected endpoints, and keep public catalog
+business/team flows. Use `window.Auth` for account prompts. Preserve role-bound
+sessions, never accept a client-selected role as authority, and keep public catalog
 responses free of drafts, answers, tokens, and business-only metadata. If a
 new static file is needed, add just that file to the API's explicit asset
 allowlist. Do not restore local mock mutations; local example cards are
@@ -414,19 +464,24 @@ points to an older system Python). Verified project test command:
 python3 -B -m unittest discover -s tests -v
 ```
 
-The suite covers score boundaries, full/empty cards, token enforcement,
+The suite covers score boundaries, full/empty cards, session/role enforcement,
 confirmation-before-publishing, catalog filtering, proposal creation, and a
 complete offline task-to-manual-acceptance workflow. It also covers malformed
 optional task-card fields, fenced question JSON, and persistence of a partial
 injected task-card response. HTTP tests call the handler directly and cover API
 behavior, the static asset allowlist, and private-file/traversal protection
-without opening a local port.
+without opening a local port. Account tests cover password hashing, normalized
+email uniqueness, login/logout/expiry, cross-account isolation, proof-based
+legacy business/team linking, and migration from the frozen version-zero
+schema. Migration tests also assert failed upgrades roll back and future
+schema versions are rejected without modifying their tables.
 
 Frontend scripts need no package installation or build step. Optional syntax
 checks use Node.js:
 
 ```bash
 node --check frontend/api.js
+node --check frontend/auth.js
 node --check frontend/examples.js
 node --check frontend/workspace.js
 node --check frontend/app.js
@@ -440,7 +495,7 @@ default ignored `data/marketplace.sqlite3` database.
 
 ## Intentional non-goals
 
-Do not add full authentication/password recovery, real-time chat,
+Do not add password recovery/email delivery, team invitations, real-time chat,
 notifications, calendars, file storage, custom model training/vector DBs,
 production deployment, mobile work, or a complete project tracker unless the
 user explicitly reprioritizes the MVP.
