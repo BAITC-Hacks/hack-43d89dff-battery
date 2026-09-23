@@ -58,6 +58,7 @@ exists.
 │   ├── server.py                # Compatibility launcher that delegates to backend.api
 │   ├── service.py               # Marketplace workflow, state rules, authorization
 │   ├── auth.py                  # Accounts, password hashing, sessions, legacy profile linking
+│   ├── seed_demo.py             # Explicit, repeatable setup of public jury demo accounts
 │   ├── database.py              # SQLite schema, reads, and transactions
 │   └── models/
 │       ├── generateQuestions.py # Question generation (provider and offline paths)
@@ -254,6 +255,15 @@ name alone. Migration preserves old task/proposal ids and relationships.
 Auth attempts are bounded by an in-process per-client rate limiter. This MVP
 does not include email verification, password recovery, multi-worker shared
 rate limiting, or team invitations. Do not imply these already exist.
+
+The Russian README contains the public jury demo credentials and a repeatable
+walkthrough. Run `python3 -m backend.seed_demo` explicitly to create missing
+demo accounts on a fresh database; it uses `MARKETPLACE_DB_PATH` or the same
+default database as the server. Existing accounts are verified without
+resetting passwords or changing roles. A credential/role mismatch fails safely.
+The command closes its temporary sessions and creates no tasks or proposals.
+Never run demo seeding automatically at server startup. These published demo
+credentials are intentional; keep real keys and non-demo credentials private.
 
 ## HTTP API
 

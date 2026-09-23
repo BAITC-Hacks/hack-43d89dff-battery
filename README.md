@@ -1,175 +1,253 @@
-# Business Task-Card Marketplace
+# Sana — бизнес-задачи для студенческих команд
 
-Dependency-free Python MVP backend for matching practical business challenges
-with student teams. It gamifies task readiness—not company prestige or student
-rankings—and never assigns a team automatically.
+**Sana** — MVP для кейса AI Sana: геймификация подготовки практических бизнес-задач. Платформа помогает представителю бизнеса превратить сырое описание проблемы в понятную карточку, а студентам — найти задачу и предложить способ её решения.
 
-## What is implemented
+Бизнесу часто трудно сформулировать ожидаемый результат, доступные данные и критерии успеха. Студентам сложно оценить такой запрос и начать работу. Sana задаёт уточняющие вопросы, структурирует ответы и показывает, чего ещё не хватает в постановке.
 
-- Draft intake and 3–5 score-maximizing clarification questions.
-- Editable task-card generation from the draft and answers.
-- Deterministic 0–100 readiness score with per-criterion explanations.
-- Required business confirmation before publishing.
-- Public catalog filtering by tag, industry, readiness, score, and text.
-- Team proposals and an explicit business accept/reject decision.
-- Business and individual student accounts with email/password sign-in.
-- Linked business/team profiles, private workspaces, and revocable sessions.
-- SQLite persistence with automatic migration of existing marketplace data.
-- Responsive Swiss-style frontend with searchable task catalog, readiness and
-  industry filters, business task editor, and student proposal workspace.
+Баллы получает **готовность задачи к работе**. Чем полнее карточка, тем выше её оценка и позиция в каталоге. Команду всегда выбирает представитель бизнеса вручную.
 
-The server uses only the Python standard library. Question selection uses the
-OpenAI Responses integration by default and reports a configuration error when
-no `OPENAI_API_KEY` is available; this avoids silently substituting a fixed
-questionnaire for draft analysis. Set `MARKETPLACE_AI_MODE=offline` explicitly
-to use deterministic demo generation without network access.
+## Быстрый доступ для жюри
 
-## Run
+Локальная версия после запуска: **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**. Нажмите **Sign in** и используйте один из демо-аккаунтов.
 
-Requires Python 3.11+ (tested with Python 3.14).
+| Роль | Профиль | Email | Пароль |
+| --- | --- | --- | --- |
+| Студент 1 | Orbit Team | `student1@sana.test` | `8iuyHVIQp8S7d01Jx-yJk75y` |
+| Студент 2 | Nova Team | `student2@sana.test` | `7-KKiO2p8DgKMFq-HaULZ_eC` |
+| Бизнес | Sana Demo Business | `business@sana.test` | `Qwqp42cT9g0X-v-om3A1WQRJ` |
 
-```bash
-python3 -m backend.api
-```
+Это открытые демонстрационные учётные записи. Каждый студент имеет личный аккаунт и отдельный связанный профиль команды. Для переключения нажмите **My account → Sign out**, затем войдите под другой учётной записью. Вкладки одного браузера используют общую сессию; для одновременной проверки разных ролей используйте разные профили браузера.
 
-Open `http://127.0.0.1:8000` to use the website. The same server serves the
-frontend and API and stores data in `data/marketplace.sqlite3` by default.
-`python3 backend/server.py` and `python3 -m backend.server` are equivalent
-launchers. Configuration is optional:
+Аккаунты уже созданы в локальной базе проекта. База SQLite не хранится в Git, поэтому **в новой копии репозитория сначала выполните команду подготовки демо-аккаунтов** из раздела установки. Она создаёт только аккаунты и профили, без задач и заявок.
 
-```bash
-MARKETPLACE_PORT=8080 MARKETPLACE_AI_MODE=offline python3 -m backend.api
-```
+## Что реализовано
 
-`/health` returns the server status. The database and its SQLite journal files
-are ignored by Git. Keep `OPENAI_API_KEY` only in the ignored `.env` file or
-environment; the API never returns it.
+- Регистрация и вход для бизнеса и студентов, выход и восстановление сессии после перезагрузки страницы.
+- Разделение доступа: бизнес управляет собственными задачами и заявками на них; студент отправляет заявки от связанной команды и видит их статусы.
+- Ввод исходного описания задачи и получение 3–5 уточняющих вопросов.
+- Формирование редактируемой карточки из описания, вопросов и ответов.
+- Детерминированная оценка готовности от 0 до 100, разбивка баллов и рекомендации по заполнению пробелов.
+- Подтверждение карточки бизнесом перед публикацией.
+- Открытый каталог с поиском, фильтрами по отрасли, навыкам и готовности, сортировкой и пагинацией.
+- Заявки команд: обоснование, подход к решению, предполагаемые сроки и ссылки на портфолио.
+- Ручное принятие или отклонение заявки бизнесом. Для одной задачи можно принять только одну команду.
+- Сохранение данных в SQLite и миграции существующей базы.
+- Адаптивный интерфейс на HTML/CSS/JavaScript без сборки и установки frontend-зависимостей.
 
-Choose **Sign in**, then **Create account**. Register as a business to post and
-manage tasks, or as a student to submit proposals through your team profile.
-Student credentials belong to an individual; the linked team profile supplies
-the team's name and contact details. Each account currently has one profile;
-joining existing teams and inviting additional members are future features.
-Account roles are fixed at registration. Sign out to use a different account.
-
-Passwords must contain 15–128 characters. Passwords are salted and hashed;
-sessions use an HttpOnly cookie and are valid for seven days. Sign-out revokes
-the current session. The browser keeps account information in memory and
-restores it from the server after a reload. Auth credentials are never written
-to local storage. Existing browser owner profiles can be linked during sign-up
-using their saved ownership proof, preserving their tasks/proposals.
-
-Task and proposal changes are saved only through the real API; a disconnected
-server does not create local task data. Same-origin hosting is the supported
-default. For HTTPS hosting, set `MARKETPLACE_COOKIE_SECURE=1`. Explicitly allowed
-same-site frontend origins can use `CORS_ORIGIN` and
-`window.MARKETPLACE_API_BASE`; wildcard credentialed CORS is not supported.
-Email verification, password recovery, invitations, and production deployment
-are not implemented.
-
-When the live catalog is empty or unavailable, the catalog displays clearly
-labeled fictional example briefs. They are read-only and never persisted.
-All actual task creation, publication, and proposal decisions use the API.
-The frontend needs no package installation or build step. Inter is loaded
-from Google Fonts, with Helvetica and Arial fallbacks when unavailable.
-
-## Workflow
+## Как работает решение
 
 ```text
-business + draft
-  -> clarification questions
-  -> answers + generated editable card
-  -> business edits and confirms
-  -> deterministic readiness evaluation
-  -> published catalog task
-  -> team proposal
-  -> manual business accept/reject
+Бизнес входит в аккаунт и описывает проблему
+    → получает уточняющие вопросы
+    → отвечает минимум на три вопроса
+    → получает карточку и оценку готовности
+    → редактирует, подтверждает и публикует карточку
+    → студенты находят задачу и отправляют заявки
+    → бизнес рассматривает заявки и вручную выбирает команду
 ```
 
-Register or sign in first. Save the response's `profile.id` and `csrf_token`,
-and retain the session cookie. Mutations require JSON, an allowed `Origin`,
-and the session's `X-CSRF-Token`. Browsers send the cookie and Origin
-automatically. The example values below are placeholders, not real credentials.
+Карточка содержит контекст, бизнес-потребность, целевых пользователей, навыки, данные, ограничения, ожидаемый результат, критерии успеха и формат взаимодействия с бизнесом. Ответы имеют приоритет над исходным описанием. Промпты требуют сохранять неизвестные факты незаполненными; результат генерации нормализуется перед сохранением и требует проверки человеком.
+
+### Как начисляются баллы
+
+Оценку рассчитывает Python-код, без обращения к AI-модели.
+
+| Критерий | Максимум |
+| --- | ---: |
+| Контекст и бизнес-потребность | 20 |
+| Данные и материалы: описание, источники, условия доступа | 20 |
+| Ожидаемый результат | 15 |
+| Критерии успеха: метрика, целевое значение, способ проверки | 15 |
+| Ограничения | 10 |
+| Целевые пользователи | 10 |
+| Контакт бизнеса и формат взаимодействия | 10 |
+| **Итого** | **100** |
+
+Уровни: `draft` — 0–39, `working` — 40–69, `ready` — 70–89, `priority` — 90–100. По умолчанию каталог показывает задачи с более высокой оценкой первыми. Низкая оценка сама по себе не запрещает публикацию: требуется подтверждение карточки владельцем.
+
+Баллы отражают заполненность полей, а не доказанную достоверность информации или качество будущего решения.
+
+## Технологии
+
+| Компонент | Использование |
+| --- | --- |
+| Python 3.11+ | Сервер, бизнес-логика, генерация, оценка и тесты |
+| Стандартная библиотека Python | `http.server`, `sqlite3`, `urllib.request`, `hashlib`, `secrets`, `unittest`; сторонние Python-пакеты не требуются |
+| HTML, CSS, JavaScript | Интерфейс, маршрутизация по URL-фрагменту `#`, формы и обращения к API через `fetch` |
+| SQLite | Аккаунты, профили, сессии, задачи и заявки |
+| OpenAI Responses API | Генерация уточняющих вопросов и карточки в онлайн-режиме |
+| `gpt-4o-mini` | Модель по умолчанию в коде; изменяется переменной окружения `OPENAI_MODEL` |
+| Google Fonts | Шрифт Inter; при недоступности используются системные шрифты |
+
+React, Vue, Django, Flask, ORM и отдельный сборщик в текущем проекте не используются. Собственного обучения моделей и векторной базы нет.
+
+## Архитектура проекта
+
+```text
+Браузер: frontend/index.html + обычные JS-скрипты
+    │  HTTP / JSON, cookie сессии, CSRF-заголовок
+    ▼
+backend/api.py — единая точка входа: статические файлы и API
+    ├── auth.py — аккаунты, проверка паролей, сессии
+    └── service.py — права доступа и правила работы с задачами/заявками
+            ├── models/generateQuestions.py — уточняющие вопросы
+            ├── models/generateTaskCard.py — генерация и нормализация карточки
+            ├── models/evaluateTaskCard.py — детерминированная оценка
+            └── database.py → SQLite
+```
+
+| Путь | Назначение |
+| --- | --- |
+| `frontend/app.js` | Каталог, публичные страницы, маршрутизация, общие UI-функции |
+| `frontend/api.js` | Обращения к API и состояние текущей сессии в памяти |
+| `frontend/auth.js` | Формы регистрации/входа и проверки роли в интерфейсе |
+| `frontend/workspace.js` | Создание и публикация задач, отправка и рассмотрение заявок |
+| `frontend/examples.js` | Явно обозначенные вымышленные примеры для пустого/недоступного каталога |
+| `backend/api.py` | Канонический запуск приложения и HTTP-маршруты |
+| `backend/server.py` | Совместимый альтернативный запуск того же приложения |
+| `backend/seed_demo.py` | Явная подготовка трёх демо-аккаунтов для жюри |
+| `tests/` | Проверки бизнес-сценариев, API, авторизации, моделей и миграций |
+| [agents.md](agents.md) | Подробная документация структуры и контрактов для дальнейшей разработки |
+
+Основные API: `/api/auth/register`, `/api/auth/login`, `/api/auth/session`, `/api/auth/logout`, `/api/catalog`, `/api/tasks`, действия `/answers`, `/card`, `/confirm`, `/publish`, а также `/proposals` и `/api/proposals/{id}/decision`. Полная таблица маршрутов находится в [agents.md](agents.md#http-api).
+
+Пароли хранятся как солёные хеши PBKDF2-HMAC-SHA256 с 600 000 итераций. Сессии действуют семь дней; cookie имеет `HttpOnly` и `SameSite=Lax`, в базе хранится только хеш токена. Изменяющие запросы проверяют Origin и, при действующей сессии, CSRF-токен. Публичный каталог не возвращает исходные черновики и ответы бизнеса.
+
+## Установка и запуск
+
+Команды ниже выполняются **из корня репозитория** в терминале macOS/Linux. Требуется Python 3.11 или новее. Если `python3` запускает старую версию, используйте `python3.11` вместо него во всех командах.
+
+### 1. Проверьте Python
 
 ```bash
-# 1. Register a business account and retain its cookie.
-curl -sS -c /tmp/sana-cookies.txt http://127.0.0.1:8000/api/auth/register \
-  -H 'Origin: http://127.0.0.1:8000' -H 'Content-Type: application/json' \
-  -d '{"role":"business","name":"Aida","organization_name":"Acme","email":"aida@example.test","password":"REPLACE_WITH_YOUR_OWN_LONG_PASSWORD"}'
-
-# 2. Start a task. Use profile.id and csrf_token from step 1.
-curl -sS -X POST http://127.0.0.1:8000/api/tasks \
-  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
-  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' \
-  -d '{"business_id":"biz_...","initial_draft":"We manually triage support requests and miss urgent cases."}'
-
-# 3. Answer the generated questions, then inspect/edit card and score.
-curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../answers \
-  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
-  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' \
-  -d '{"task_summary":"Build a ticket-prioritization prototype.","answers":["Support agents need faster triage","Anonymized tickets in a secure folder","A web prototype","80% accuracy verified against labelled tickets","No personal data; four weeks; Aida via weekly video calls"]}'
-
-# 4. Confirm and publish. Low-scoring tasks are still eligible to publish.
-curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../confirm \
-  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
-  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' -d '{}'
-curl -sS -X POST http://127.0.0.1:8000/api/tasks/task_.../publish \
-  -b /tmp/sana-cookies.txt -H 'Origin: http://127.0.0.1:8000' \
-  -H 'Content-Type: application/json' -H 'X-CSRF-Token: CSRF_TOKEN' -d '{}'
-
-# 5. Browse the public catalog.
-curl -sS 'http://127.0.0.1:8000/api/catalog?tags=support&readiness=ready'
+python3 --version
 ```
 
-## API surface
+Установка через `pip` или `npm` не нужна.
 
-| Method | Endpoint | Purpose |
+### 2. Подготовьте демо-аккаунты
+
+```bash
+python3 -m backend.seed_demo
+```
+
+Команда создаёт отсутствующие демо-аккаунты и проверяет вход в существующие. Повторный запуск не сбрасывает пароли и не удаляет данные. Если указанный email уже занят аккаунтом с другим паролем, команда сообщает об ошибке, сохраняя существующий аккаунт.
+
+### 3. Запустите демонстрацию без API-ключа
+
+```bash
+MARKETPLACE_AI_MODE=offline python3 -m backend.api
+```
+
+Откройте **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**. Проверка доступности сервера: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health).
+
+В `offline` нет обращений к AI API: используются пять фиксированных вопросов на английском и детерминированная сборка карточки. Это режим проверки полного пользовательского сценария; адаптивную генерацию вопросов нужно проверять в онлайн-режиме.
+
+### 4. Онлайн-режим с AI
+
+Добавьте свой ключ в `.env` в корне проекта:
+
+```dotenv
+OPENAI_API_KEY=ваш_ключ
+```
+
+Затем запустите:
+
+```bash
+MARKETPLACE_AI_MODE=online python3 -m backend.api
+```
+
+Другую модель можно указать через переменную окружения:
+
+```bash
+OPENAI_MODEL=gpt-4o-mini MARKETPLACE_AI_MODE=online python3 -m backend.api
+```
+
+`.env` исключён из Git. Онлайн-режим требует доступа к интернету и действующего ключа. Режим по умолчанию — `auto`; генерация вопросов в нём также обращается к провайдеру и при отсутствии ключа возвращает ошибку. Для демонстрации без ключа явно выбирайте `offline`.
+
+### Настройки
+
+| Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
-| `POST` | `/api/auth/register` | Create an individual account, linked profile, and session. |
-| `POST` | `/api/auth/login` | Sign in with email and password. |
-| `GET` | `/api/auth/session` | Restore current user/profile and CSRF token, or anonymous state. |
-| `POST` | `/api/auth/logout` | Revoke the current session and clear its cookie. |
-| `POST` | `/api/tasks` | Start a draft and get questions. |
-| `POST` | `/api/tasks/{id}/answers` | Generate a task card from answers. |
-| `PATCH` | `/api/tasks/{id}/card` | Edit card content; moves it back to `card_ready`. |
-| `POST` | `/api/tasks/{id}/confirm` | Confirm the current card and score it. |
-| `POST` | `/api/tasks/{id}/publish` | Publish a confirmed card. |
-| `GET` | `/api/catalog` | Browse published tasks. |
-| `GET` | `/api/catalog/{id}` | Read one published task. |
-| `POST` | `/api/tasks/{id}/proposals` | Submit a team proposal. |
-| `GET` | `/api/tasks/{id}/proposals` | Business reads proposals for its task. |
-| `PATCH` | `/api/proposals/{id}/decision` | Business explicitly accepts or rejects a proposal. |
+| `MARKETPLACE_HOST` | `127.0.0.1` | Адрес HTTP-сервера |
+| `MARKETPLACE_PORT` | `8000` | Порт |
+| `MARKETPLACE_DB_PATH` | `data/marketplace.sqlite3` | Путь к базе; одинаковый для подготовки аккаунтов и запуска сервера |
+| `MARKETPLACE_AI_MODE` | `auto` | `offline`, `online` или `auto` |
+| `OPENAI_API_KEY` | Не задан | Ключ API; читается из окружения или `.env` |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Модель для онлайн-генерации; читается из окружения |
+| `MARKETPLACE_COOKIE_SECURE` | Не задан | Значение `1` добавляет Secure к cookie при обслуживании через HTTPS |
+| `CORS_ORIGIN` | Не задан | Дополнительный явно разрешённый origin; по умолчанию frontend и API работают на одном origin |
 
-Protected endpoints require a valid session cookie and enforce the account's
-role and profile ownership. `X-Owner-Token` is no longer accepted over HTTP;
-old profile creation endpoints return 410. The catalog stays public. Responses
-and errors are JSON: 401 for missing/expired authentication, 403 for forbidden
-access or failed request protection, 409 for conflicts, 422 for invalid input,
-and 429 for too many authentication attempts.
+База создаётся автоматически. SQLite-файлы и журналы исключены из Git. При занятом порте можно задать `MARKETPLACE_PORT=8080` и открыть соответствующий адрес.
 
-## Readiness formula
+## Как проверить решение: сценарий для жюри
 
-| Area | Points |
-| --- | ---: |
-| Context and business need | 20 |
-| Data and materials | 20 |
-| Expected result | 15 |
-| Success criteria | 15 |
-| Limitations | 10 |
-| Target users | 10 |
-| Business contact and interaction | 10 |
-| **Total** | **100** |
+1. Запустите приложение и войдите как **Sana Demo Business** по таблице выше.
+2. Нажмите **Post a task** и вставьте пример описания:
 
-Levels: `draft` 0–39, `working` 40–69, `ready` 70–89, and `priority` 90–100.
-The evaluator returns missing fields and improvement suggestions for every
-unscored criterion.
+   > Наш интернет-магазин обрабатывает обращения покупателей вручную в общем почтовом ящике. Срочные запросы теряются среди остальных, поэтому клиентам приходится долго ждать ответа. Задача предназначена для сотрудников поддержки.
 
-## Test
+3. Нажмите **Clarify my task**. В офлайн-режиме появятся пять фиксированных вопросов. Для воспроизводимой проверки можно использовать следующие вымышленные ответы:
+
+   | О чём вопрос | Пример ответа |
+   | --- | --- |
+   | Данные и доступ | Есть CSV-выгрузка из системы поддержки: 2 000 обезличенных обращений с текстом и меткой приоритета. Доступ к папке выдаётся команде в начале проекта. |
+   | Ожидаемый результат | Рабочий прототип, который импортирует CSV и присваивает обращениям низкий, средний или высокий приоритет, плюс инструкция по запуску. |
+   | Критерии успеха | Не менее 85% совпадений с исходными метками на 200 отложенных обращениях, которые не использовались при разработке. |
+   | Контекст, потребность и пользователи | Операторы поддержки вручную разбирают общую очередь. Нужно быстрее находить срочные обращения и уменьшить задержки ответа клиентам. |
+   | Ограничения и взаимодействие | Срок — четыре недели, использовать только обезличенные данные. Контакт — Айда, руководитель поддержки; обратная связь на еженедельном видеозвонке. |
+
+4. Нажмите **Build task card**. Проверьте полученную карточку, исправьте неточности, добавьте недостающие поля и нажмите **Save & update score**. Посмотрите, как меняются баллы и рекомендации.
+5. Подтвердите карточку через **Confirm task card**, затем опубликуйте её. Задача появится в открытом каталоге.
+6. Выйдите из бизнес-аккаунта. Войдите как **Student One / Orbit Team**, откройте опубликованную задачу и отправьте заявку: опишите, почему команда подходит и как будет решать задачу.
+7. Повторите отправку от **Student Two / Nova Team**, предложив другой подход.
+8. Снова войдите как бизнес, откройте свою задачу в **My workspace** и рассмотрите обе заявки. Нажмите **Accept team** у одной и при желании **Decline proposal** у другой.
+9. Войдите под студентами и проверьте статусы в **My proposals**. Принятие одной команды не отклоняет другую автоматически.
+
+Все изменения сохраняются в базе. После повторного входа бизнес видит свои задачи, студенты — свои заявки. Оценка после генерации зависит от заполнения карточки; пример не гарантирует заранее заданный балл.
+
+Карточки с пометкой примера в пустом каталоге доступны только для просмотра. Для проверки заявок опубликуйте собственную задачу по сценарию выше.
+
+### Автоматические проверки
 
 ```bash
 python3 -B -m unittest discover -s tests -v
 ```
 
-The tests cover scoring, the complete draft-to-proposal workflow, account and
-session behavior, cross-account authorization, request protection, safe legacy
-profile linking, and migration of a previous-schema SQLite database.
+Тесты проверяют оценку готовности, полный путь от черновика до принятия команды, права доступа, вход/выход и срок сессии, обработку некорректных ответов модели, защиту HTTP API и миграции SQLite. Тесты используют временные базы и не требуют реального API-ключа.
+
+При установленном Node.js можно дополнительно проверить синтаксис frontend:
+
+```bash
+node --check frontend/api.js
+node --check frontend/auth.js
+node --check frontend/examples.js
+node --check frontend/workspace.js
+node --check frontend/app.js
+```
+
+## Данные и интеграции
+
+- **Данные бизнеса:** текст задачи, ответы на уточняющие вопросы и исправления карточки. Автоматического подключения к CRM или корпоративным источникам нет.
+- **Данные студентов:** профиль команды и текст заявки, сроки, ссылки на портфолио.
+- **OpenAI Responses API:** онлайн-запросы отправляются на `https://api.openai.com/v1/responses`; провайдер получает текст, необходимый для генерации вопросов и карточки. В запросах задано `store: false`.
+- **Локальная SQLite:** хранит аккаунты, профили, сессии, задачи, оценки и заявки. Пароли и сессионные токены сохраняются в виде хешей.
+- **Демонстрационные карточки:** вымышленные данные из `frontend/examples.js`; не записываются в базу и не принимают заявки.
+- **Google Fonts:** внешний источник шрифта Inter; отсутствие шрифта не блокирует приложение.
+
+CSV и набор обращений из сценария выше — описание вымышленной бизнес-задачи. Сам датасет не включён в репозиторий. Sana помогает сформулировать задачу; она не обучает классификатор обращений и не измеряет его точность.
+
+## Ограничения текущей версии
+
+- Это хакатонный MVP, а не готовая производственная платформа.
+- Интерфейс сейчас на английском. Онлайн-промпт вопросов просит сохранить язык исходного описания; отдельного переключателя языка нет. Офлайн-вопросы фиксированы и написаны на английском.
+- У студента один связанный профиль команды. Приглашения, совместное членство, редактирование профиля и смена роли не реализованы.
+- Нет подтверждения email, восстановления пароля, чата, уведомлений, календаря и загрузки файлов. Портфолио указывается ссылками.
+- Опубликованные карточки нельзя редактировать или генерировать заново. Отзыв заявки отдельным действием не реализован.
+- AI-результат требует проверки человеком. Наличие поля приносит баллы, но не подтверждает правдивость его содержимого.
+- Каталог рассчитан на небольшой объём: сервер фильтрует прочитанные опубликованные записи в Python, frontend дополнительно фильтрует и разбивает загруженный список на страницы.
+- Ограничение частоты попыток входа работает внутри одного процесса. Инфраструктура производственного развёртывания и встроенный HTTPS не настроены.
+
+## Развёрнутая версия
+
+Публичная deployed-ссылка в текущем репозитории не указана. Проверить решение можно локально по адресу **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** после запуска. Это адрес на компьютере, где работает сервер, а не публичный сайт.
