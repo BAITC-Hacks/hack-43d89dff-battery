@@ -13,12 +13,12 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 TaskCard = dict[str, Any]
-LLMGenerate = Callable[[str], str | Mapping[str, Any]]
+LLMGenerate = Callable[[str], Union[str, Mapping[str, Any]]]
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"

@@ -1,83 +1,45 @@
 # Engineering Handoff: Business Task-Card Marketplace
 
-## Product rules
+## Product idea
 
-This hackathon MVP turns rough business challenges into publishable student-team
-tasks. The business must answer clarification questions, review and confirm an
-editable task card, then explicitly decide whether to accept or reject a team
-proposal.
+This repository is a five-hour hackathon MVP for the AI Sana case: gamification of practical business tasks.
 
-Readiness is the gamification target. It is neither company prestige nor a
-student ranking. Do not implement automatic team selection, assignment, or
-rejection. Low-readiness tasks stay publishable and can receive proposals.
+A business representative writes a rough task description. The system asks clarification questions, turns the answers into an editable task card, calculates the task's readiness score, and publishes it in an open catalog. Student teams browse/filter tasks, submit proposals, and the business manually accepts or rejects proposals.
 
-```text
-draft -> questions -> answers -> editable card -> confirm -> publish
-      -> public catalog -> team proposal -> manual business decision
-```
+The central gamification target is the **business task's readiness**, not company prestige and not student rankings. A better-defined task receives a higher score and a better catalog position. The system must never automatically assign a team.
 
-## Implemented architecture
+## Required end-to-end flow
 
-The code is dependency-free Python: `http.server` serves JSON and SQLite stores
-state. No package install is needed.
+1. Business enters a weak draft in any language (KZ/RU/EN mixed).
+2. Question-generation model (`generateQuestions.py` - AI Task Architect) normalizes the draft, does a provisional 100-point evaluation to find gaps, and asks 3-5 targeted clarifying questions in a specified `TARGET_LANGUAGE`.
+3. Business answers them.
+4. Task-card model (`generateTaskCard.py`) converts draft, Q&A, and summary into an editable card matching the updated `TaskCard` dictionary schema.
+5. Rating engine scores confirmed fields from 0 to 100 and explains missing information.
+6. Business confirms and publishes the task.
+7. Students browse/filter the catalog and submit a proposal.
+8. Business manually accepts or rejects proposals.
 
-```text
-backend/
-├── api.py                    # HTTP routes, JSON/CORS/error handling, executable server
-├── database.py               # SQLite schema, reads, write transactions
-├── service.py                # Validation, ownership, workflow, catalog, proposals
-└── models/
-    ├── generateQuestions.py  # OpenAI or deterministic questions
-    ├── generateTaskCard.py   # Source-grounded OpenAI or offline task cards
-    └── evaluateTaskCard.py   # Deterministic 0–100 readiness scoring
-tests/
-├── test_evaluate_task_card.py
-└── test_marketplace_workflow.py
-```
-
-Run from repository root:
-
-```bash
-python3 -m backend.api
-python3 -B -m unittest discover -s tests -v
-```
-
-Default server/database: `127.0.0.1:8000` and `data/marketplace.sqlite3`.
-
-## Configuration and AI mode
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MARKETPLACE_HOST` | `127.0.0.1` | Server host. |
-| `MARKETPLACE_PORT` | `8000` | Server port. |
-| `MARKETPLACE_DB_PATH` | `data/marketplace.sqlite3` | SQLite database. |
-| `MARKETPLACE_AI_MODE` | `auto` | `auto`, `online`, or `offline`. |
-| `OPENAI_API_KEY` | unset | Enables live model calls. |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Responses API model override. |
-| `CORS_ORIGIN` | `*` | CORS response origin. |
-
-`auto` uses OpenAI only when a key is available from environment or `.env`; it
-otherwise uses deterministic offline generation. `offline` is ideal for local
-demo/tests. `online` surfaces provider errors rather than inventing content.
-OpenAI calls use `store: false`.
-
-Never print, commit, or return API keys, authorization headers, or full
-environment values. `.env`, SQLite files, and Python bytecode are ignored.
-
-## Layering and extension boundaries
+## Repository structure
 
 ```text
-MarketplaceHandler (api.py)
-  -> MarketplaceService (service.py)
-      -> generators / deterministic evaluator
-      -> Database read or transaction context (database.py)
+.
+├── README.md
+├── agents.md                    # This handoff document
+├── .env                         # Local secret; ignored by Git
+├── .gitignore                   # Must keep .env ignored
+├── frontend/                    # Vanilla HTML/CSS/JS SaaS UI
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+└── backend/
+    ├── server.py                # Built-in http.server functioning as API router
+    └── models/
+        ├── generateQuestions.py # Implements the AI Task Architect & provisional Evaluation Engine
+        ├── generateTaskCard.py  # Implements task-card generation with the new schema template
+        └── evaluateTaskCard.py  # Reserved for final deterministic readiness scoring
 ```
 
-Keep `api.py` thin: parse HTTP/JSON and render errors there; put validation,
-authorization, state transitions, and persistence orchestration in
-`MarketplaceService`. Model modules must not write to SQLite or make workflow
-decisions. `MarketplaceService` accepts injectable `question_generator` and
-`card_generator` callables; preserve this provider/test seam.
+The project now includes a simple frontend UI (SaaS aesthetic) and an HTTP server routing APIs, utilizing only standard-library Python to maintain the dependency-free MVP state.
 
 ## Persistence schema
 
