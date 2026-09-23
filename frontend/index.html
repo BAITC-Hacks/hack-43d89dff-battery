@@ -1,136 +1,44 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Sana - Task Card Creator</title>
-    <!-- Use Inter font for SaaS look -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Real business challenges. Student-led solutions. Discover a clear brief, build your proposal, and turn your skills into impact with Sana.">
+  <title>Sana — Real tasks. Real impact.</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="api.js" defer></script>
+  <script src="examples.js" defer></script>
+  <script src="workspace.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Task Card Creator</h1>
-            <p>From a messy draft to a structured, gamified business task.</p>
-        </div>
-
-        <!-- Step 1: Initial Draft -->
-        <div id="step-1" class="card">
-            <div class="card-header">
-                <h2>Step 1: Describe the Business Need</h2>
-            </div>
-            <div class="card-body">
-                <form id="draft-form">
-                    <div class="form-group">
-                        <label for="target-language">Target output language</label>
-                        <select id="target-language">
-                            <option value="EN">English</option>
-                            <option value="RU">Russian</option>
-                            <option value="KZ">Kazakh</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="initial-draft">Raw business idea or draft (can be mixed languages)</label>
-                        <textarea id="initial-draft" placeholder="E.g., We need an AI tool to classify support reports. Data is available..."></textarea>
-                    </div>
-
-                    <button type="submit" id="btn-generate-questions" class="btn btn-primary">
-                        Analyze Task Readiness
-                        <span id="loader-1" class="spinner hidden"></span>
-                    </button>
-                </form>
-            </div>
-        </div>
-
-        <!-- Step 2: AI Evaluation & Questions -->
-        <div id="step-2" class="card hidden">
-            <div class="card-header">
-                <h2>Step 2: AI Task Architect Feedback</h2>
-            </div>
-            <div class="card-body">
-                <div class="score-panel">
-                    <div id="ai-score" class="score-circle">0</div>
-                    <div class="score-details">
-                        <h3>Provisional Readiness Score</h3>
-                        <p>Based on the 100-point rubric, here is what your draft scored. Answer the AI's follow-up questions below to recover missing points and build a complete task card.</p>
-                    </div>
-                </div>
-
-                <form id="questions-form">
-                    <div id="questions-container">
-                        <!-- Questions will be dynamically injected here -->
-                    </div>
-
-                    <button type="submit" id="btn-generate-card" class="btn btn-primary">
-                        Generate Final Task Card
-                        <span id="loader-2" class="spinner hidden"></span>
-                    </button>
-                </form>
-            </div>
-        </div>
-
-        <!-- Step 3: Final Task Card -->
-        <div id="step-3" class="card hidden">
-            <div class="card-header">
-                <h2>Step 3: Final Task Card Preview</h2>
-            </div>
-            <div class="card-body">
-                <div class="score-panel" style="background: linear-gradient(to right, #ECFDF5, white); border-color: #6EE7B7;">
-                    <div id="final-score" class="score-circle" style="color: #059669; border-color: #059669;">0</div>
-                    <div class="score-details">
-                        <h3 id="readiness-level">Readiness Level: Draft</h3>
-                        <p>This is the deterministic score assigned based on the final populated fields. This score will determine the catalog ranking.</p>
-                    </div>
-                </div>
-
-                <div class="summary-grid">
-                    <div class="summary-item" style="grid-column: span 2;">
-                        <div class="label">Project Title</div>
-                        <div class="value"><h3 id="card-title"></h3></div>
-                        <div class="tag-list" id="card-tags"></div>
-                    </div>
-                    
-                    <div class="summary-item" style="grid-column: span 2;">
-                        <div class="label">Context & Background</div>
-                        <div class="value" id="card-context"></div>
-                    </div>
-
-                    <div class="summary-item">
-                        <div class="label">Business Need</div>
-                        <div class="value" id="card-need"></div>
-                    </div>
-
-                    <div class="summary-item">
-                        <div class="label">Expected Result</div>
-                        <div class="value" id="card-expected"></div>
-                    </div>
-
-                    <div class="summary-item" style="grid-column: span 2;">
-                        <div class="label">Available Data</div>
-                        <div class="value" id="card-data"></div>
-                    </div>
-                    
-                    <div class="summary-item" style="grid-column: span 2;">
-                        <div class="label">Target Users</div>
-                        <div class="value" id="card-users"></div>
-                    </div>
-                    
-                    <div class="summary-item" style="grid-column: span 2;">
-                        <div class="label">Success Criteria</div>
-                        <div class="value" id="card-success"></div>
-                    </div>
-
-                    <div class="summary-item" style="grid-column: span 2; border-top: 1px solid var(--border-light); padding-top: 1rem; margin-top: 1rem;">
-                        <div class="label" style="color: #DC2626;">Missing Information</div>
-                        <div class="value" id="card-missing"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="site-header">
+    <a href="#catalog" class="wordmark" aria-label="Sana home"><span class="brand-symbol" aria-hidden="true">✳</span>sana<span class="brand-period">.</span></a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <a href="#catalog" data-nav="catalog">Explore tasks<span class="nav-index">01</span></a>
+      <a href="#how-it-works" data-nav="how-it-works">How it works<span class="nav-index">02</span></a>
+      <a href="#proposals" data-nav="workspace" id="workspace-link">My proposals<span class="nav-index">03</span></a>
+    </nav>
+    <div class="header-actions">
+      <label class="role-control"><span class="sr-only">Your role</span><select id="role-select"><option value="team">For students</option><option value="business">For business</option></select></label>
+      <a href="#create" class="btn btn-primary header-cta">Post a task <span aria-hidden="true">↗</span></a>
+      <button type="button" id="mobile-menu" class="icon-btn mobile-menu" aria-label="Open navigation" aria-expanded="false"><span aria-hidden="true">☰</span></button>
     </div>
-
-    <script src="app.js"></script>
+  </header>
+  <main id="main-content" tabindex="-1"><div id="app-root"><div class="loading-state" role="status">Loading the opportunity index…</div></div></main>
+  <footer class="site-footer">
+    <a href="#catalog" class="footer-brand" aria-label="Sana home">sana.</a>
+    <p>Business challenges.<br>Student potential. Shared progress.</p>
+    <div class="footer-end"><span class="eyebrow">BUILT FOR WHAT COMES NEXT</span><span>AI Sana · Kazakhstan</span></div>
+  </footer>
+  <dialog id="app-dialog" aria-labelledby="dialog-title"><div class="modal-header"><p id="dialog-title" class="panel-title"></p><button class="icon-btn" id="close-dialog" aria-label="Close dialog" type="button">×</button></div><div class="modal-body"></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="empty-state">Enable JavaScript to browse tasks and use your workspace.</p></noscript>
 </body>
 </html>

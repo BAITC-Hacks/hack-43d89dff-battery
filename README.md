@@ -13,6 +13,8 @@ rankings—and never assigns a team automatically.
 - Public catalog filtering by tag, industry, readiness, score, and text.
 - Team proposals and an explicit business accept/reject decision.
 - SQLite persistence and lightweight owner tokens for the MVP (not full auth).
+- Responsive Swiss-style frontend with searchable task catalog, readiness and
+  industry filters, business task editor, and student proposal workspace.
 
 The server uses only the Python standard library. It starts in offline mode
 automatically when no OpenAI key is configured, so the demo works without
@@ -28,8 +30,10 @@ Requires Python 3.11+ (tested with Python 3.14).
 python3 -m backend.api
 ```
 
-The API listens at `http://127.0.0.1:8000` and stores data in
-`data/marketplace.sqlite3` by default. Configuration is optional:
+Open `http://127.0.0.1:8000` to use the website. The same server serves the
+frontend and API and stores data in `data/marketplace.sqlite3` by default.
+`python3 backend/server.py` and `python3 -m backend.server` are equivalent
+launchers. Configuration is optional:
 
 ```bash
 MARKETPLACE_PORT=8080 MARKETPLACE_AI_MODE=offline python3 -m backend.api
@@ -38,6 +42,18 @@ MARKETPLACE_PORT=8080 MARKETPLACE_AI_MODE=offline python3 -m backend.api
 `/health` returns the server status. The database and its SQLite journal files
 are ignored by Git. Keep `OPENAI_API_KEY` only in the ignored `.env` file or
 environment; the API never returns it.
+
+The frontend keeps separate business and team owner profiles in browser local
+storage for this API origin. Switching roles keeps both profiles. Task and
+proposal changes are saved only through the real API; a disconnected server
+does not create local task data. If hosting the frontend separately, set
+`window.MARKETPLACE_API_BASE` to the API server origin before loading `api.js`.
+
+When the live catalog is empty or unavailable, the catalog displays clearly
+labeled fictional example briefs. They are read-only and never persisted.
+All actual task creation, publication, and proposal decisions use the API.
+The frontend needs no package installation or build step. Inter is loaded
+from Google Fonts, with Helvetica and Arial fallbacks when unavailable.
 
 ## Workflow
 

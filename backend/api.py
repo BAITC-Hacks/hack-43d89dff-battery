@@ -1,4 +1,4 @@
-"""Dependency-free JSON HTTP API for the marketplace MVP.
+"""Dependency-free HTTP API and frontend for the marketplace MVP.
 
 Run with: ``python3 -m backend.api``
 """
@@ -19,6 +19,19 @@ from .service import MarketplaceService, ServiceError
 
 
 MAX_BODY_BYTES = 1_000_000
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# Only application assets are public. Never expose repository files, databases,
+# credentials, or arbitrary paths through the static-file route.
+FRONTEND_ASSETS = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/api.js": ("api.js", "text/javascript; charset=utf-8"),
+    "/workspace.js": ("workspace.js", "text/javascript; charset=utf-8"),
+    "/examples.js": ("examples.js", "text/javascript; charset=utf-8"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+}
 TASK_ROUTE = re.compile(r"^/api/tasks/([^/]+)$")
 TASK_ANSWERS_ROUTE = re.compile(r"^/api/tasks/([^/]+)/answers$")
 TASK_CARD_ROUTE = re.compile(r"^/api/tasks/([^/]+)/card$")
@@ -54,6 +67,9 @@ class MarketplaceHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
         try:
+            if method == "GET" and path in FRONTEND_ASSETS:
+                self._send_asset(path)
+                return
             result, status = self._route(method, path, query)
             self._send(status, result)
         except ServiceError as error:
@@ -66,6 +82,20 @@ class MarketplaceHandler(BaseHTTPRequestHandler):
             # Deliberately do not leak internals or configuration through the API.
             self.log_error("Unhandled API error")
             self._send(500, {"error": {"code": "internal_error", "message": "Unexpected server error."}})
+
+    def _send_asset(self, path: str) -> None:
+        filename, content_type = FRONTEND_ASSETS[path]
+        asset = (FRONTEND_DIR / filename).resolve()
+        if asset.parent != FRONTEND_DIR.resolve() or not asset.is_file():
+            raise ServiceError(404, "route_not_found", "Asset not found.")
+        body = asset.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _route(self, method: str, path: str, query: dict[str, list[str]]) -> tuple[Any, int]:
         token = self.headers.get("X-Owner-Token")
@@ -194,7 +224,7 @@ def main() -> None:
     host = os.getenv("MARKETPLACE_HOST", "127.0.0.1")
     port = int(os.getenv("MARKETPLACE_PORT", "8000"))
     server = create_server(host, port)
-    print(f"Marketplace API listening on http://{host}:{port}")
+    print(f"Marketplace website and API listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
