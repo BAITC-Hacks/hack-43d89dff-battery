@@ -36,13 +36,11 @@ class MarketplaceWorkflowTests(unittest.TestCase):
             {
                 "task_summary": "Build a support-ticket prioritization prototype.",
                 "answers": [
-                    "Support agents and support managers",
                     "Anonymized tickets in a secure folder",
                     "A web prototype",
                     "80% accuracy, verified against a labelled test set",
-                    "No personal data; four-week scope",
-                    "Python and UX design",
-                    "Aida, Support Lead, via weekly video calls",
+                    "Manual triage delays urgent tickets for support agents and managers",
+                    "No personal data; four-week scope; Aida, Support Lead, via weekly video calls",
                 ],
             },
             self.business["owner_token"],
@@ -98,4 +96,3 @@ class MarketplaceWorkflowTests(unittest.TestCase):
         with self.assertRaises(ServiceError) as unconfirmed:
             self.service.publish_task(task["id"], self.business["owner_token"])
         self.assertEqual(unconfirmed.exception.code, "confirmation_required")
-

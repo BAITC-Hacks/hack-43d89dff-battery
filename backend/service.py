@@ -460,9 +460,12 @@ class MarketplaceService:
         if self.question_generator:
             questions = self.question_generator(draft)
             return _validated_questions(questions)
-        if self._use_online_ai():
-            return generate_questions(draft)
-        return generate_questions_offline(draft)
+        if self.ai_mode == "offline":
+            return generate_questions_offline(draft)
+        # Question selection is an analytical task: in both auto and online
+        # modes, call the LLM and surface missing provider configuration rather
+        # than silently replacing its analysis with a fixed questionnaire.
+        return generate_questions(draft)
 
     def _card(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if self.card_generator:
@@ -682,4 +685,4 @@ def _validated_questions(value: Any) -> list[str]:
             questions.append(question)
     if len(questions) < 3:
         raise ValueError("question generator returned fewer than three questions")
-    return questions[:7]
+    return questions[:5]

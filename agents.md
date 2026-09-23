@@ -18,9 +18,9 @@ are the source of truth if they differ from this document.
 ## Product end-to-end flow
 
 1. Business enters a weak draft in any language (KZ/RU/EN mixed).
-2. Question generation analyzes readiness gaps and returns 3–7 targeted
+2. Question generation analyzes readiness gaps and returns 3–5 targeted
    questions. The online prompt asks the provider to preserve the source
-   language. The offline generator currently returns seven fixed English
+   language. The offline generator currently returns five fixed English
    questions. Explicit `TARGET_LANGUAGE` selection is not implemented in the
    current UI/model signature.
 3. Business answers them.
@@ -285,7 +285,7 @@ unless versioning the API.
 ## Model contracts and source-grounding
 
 ```python
-generate_questions(initial_draft, llm_generate=None, minimum=3, maximum=7) -> list[str]
+generate_questions(initial_draft, llm_generate=None, minimum=3, maximum=5) -> list[str]
 generate_questions_offline(initial_draft) -> list[str]
 generate_task_card(payload, llm_generate=None) -> dict
 generate_task_card_offline(payload) -> dict
@@ -325,7 +325,7 @@ provider is configured for JSON output:
   boundary before evaluation. This protects custom/injected card generators
   that return a partial card. It merges evaluator-detected gaps into
   `missing_information`.
-- Custom question generators must return a list of 3–7 usable question
+- Custom question generators must return a list of 3–5 usable question
   strings. Custom card generators must return a mapping. Invalid injected
   output becomes a safe API error, never corrupted task JSON.
 

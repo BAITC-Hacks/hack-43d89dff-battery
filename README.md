@@ -6,7 +6,7 @@ rankings—and never assigns a team automatically.
 
 ## What is implemented
 
-- Draft intake and 3–7 clarification questions.
+- Draft intake and 3–5 score-maximizing clarification questions.
 - Editable task-card generation from the draft and answers.
 - Deterministic 0–100 readiness score with per-criterion explanations.
 - Required business confirmation before publishing.
@@ -16,11 +16,11 @@ rankings—and never assigns a team automatically.
 - Responsive Swiss-style frontend with searchable task catalog, readiness and
   industry filters, business task editor, and student proposal workspace.
 
-The server uses only the Python standard library. It starts in offline mode
-automatically when no OpenAI key is configured, so the demo works without
-network access. When `OPENAI_API_KEY` is available it uses the existing OpenAI
-Responses integrations for question and card generation; set
-`MARKETPLACE_AI_MODE=offline` to force deterministic demo generation.
+The server uses only the Python standard library. Question selection uses the
+OpenAI Responses integration by default and reports a configuration error when
+no `OPENAI_API_KEY` is available; this avoids silently substituting a fixed
+questionnaire for draft analysis. Set `MARKETPLACE_AI_MODE=offline` explicitly
+to use deterministic demo generation without network access.
 
 ## Run
 

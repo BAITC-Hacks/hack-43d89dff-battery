@@ -89,8 +89,10 @@ class MarketplaceHttpTests(unittest.TestCase):
         self.assertEqual(self.request("POST", task_path + "/answers", {"answers": ["a", "b", "c"]}, "invalid")[0], 403)
 
         status, _, card = self.request("POST", task_path + "/answers", {"answers": [
-            "Support managers", "Anonymized tickets in a secure folder", "A prioritization prototype",
-            "80% accuracy on a labelled test set", "No personal data", "Python and design", "Weekly calls",
+            "Anonymized tickets in a secure folder", "A prioritization prototype",
+            "80% accuracy on a labelled test set",
+            "Support teams need faster triage for support managers",
+            "No personal data; Aida will give feedback in weekly video calls",
         ]}, business_token)
         self.assertEqual(status, 200)
         self.assertEqual(card["status"], "card_ready")

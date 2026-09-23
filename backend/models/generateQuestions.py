@@ -20,22 +20,36 @@ from .generateTaskCard import (
 
 LLMGenerate = Callable[[str], str | Mapping[str, Any] | Sequence[str]]
 
-QUESTION_SYSTEM_PROMPT = """You are a business analyst helping turn a rough business problem into a student project task. Ask concise, source-relevant clarification questions. Focus on missing readiness information: business need, target users, available data and access, deliverable, measurable success, constraints, and business-team interaction. Never answer the questions or invent facts. Preserve the source language. Return JSON only."""
+DEFAULT_MINIMUM_QUESTIONS = 3
+DEFAULT_MAXIMUM_QUESTIONS = 5
+
+QUESTION_SYSTEM_PROMPT = """You are a business analyst optimizing the readiness score of a student project task.
+
+Analyze the rough draft before choosing any questions. Ask only about facts that
+are absent, unclear, or too vague to earn points under the supplied scoring
+rubric. Select the smallest set of questions whose answers could recover the
+largest number of missing points. Higher-value gaps come first. One concise
+question may request closely related details from the same scoring area.
+
+Do not use a fixed questionnaire. Do not ask for information already stated in
+the draft. Do not prioritize unscored details while a scored gap remains. Never
+answer a question or invent a fact. Preserve the draft's language, including a
+mixed language when appropriate. Return JSON only."""
 
 
 def generate_questions(
     initial_draft: str,
     llm_generate: LLMGenerate | None = None,
     *,
-    minimum: int = 3,
-    maximum: int = 7,
+    minimum: int = DEFAULT_MINIMUM_QUESTIONS,
+    maximum: int = DEFAULT_MAXIMUM_QUESTIONS,
 ) -> list[str]:
-    """Generate and validate 3-7 clarification questions for a draft."""
+    """Use an LLM to select and validate 3-5 score-maximizing questions."""
     draft = _clean_text(initial_draft)
     if not draft:
         raise ValueError("initial_draft is required and cannot be empty")
-    if minimum < 3 or maximum < minimum or maximum > 10:
-        raise ValueError("question limits must satisfy 3 <= minimum <= maximum <= 10")
+    if minimum < 3 or maximum < minimum or maximum > 5:
+        raise ValueError("question limits must satisfy 3 <= minimum <= maximum <= 5")
 
     generator = llm_generate or openai_question_generate
     prompt = build_questions_prompt(draft, minimum=minimum, maximum=maximum)
@@ -47,27 +61,47 @@ def generate_questions(
 
 
 def generate_questions_offline(initial_draft: str) -> list[str]:
-    """Provide a deterministic readiness questionnaire for local demos/tests."""
+    """Provide a deterministic five-question fallback for explicit offline use."""
     draft = _clean_text(initial_draft)
     if not draft:
         raise ValueError("initial_draft is required and cannot be empty")
     return [
-        "Who are the target users or beneficiaries of this solution?",
         "What data, examples, or other materials are available, and under what access conditions?",
         "What concrete deliverable should the student team produce?",
         "Which measurable targets and verification method will define success?",
-        "What scope, deadline, privacy, legal, budget, or technical limitations apply?",
-        "Which skills or technologies are required or preferred?",
-        "Who is the business contact, and how often can they provide feedback?",
+        "What current situation and business need should be improved, and who are the target users or beneficiaries?",
+        "What limitations apply, and who is the business contact, through which channel, and how often can they provide feedback?",
     ]
 
 
-def build_questions_prompt(initial_draft: str, *, minimum: int = 3, maximum: int = 7) -> str:
-    return f"""Read the rough task below and ask {minimum} to {maximum} high-value clarification questions.
+def build_questions_prompt(
+    initial_draft: str,
+    *,
+    minimum: int = DEFAULT_MINIMUM_QUESTIONS,
+    maximum: int = DEFAULT_MAXIMUM_QUESTIONS,
+) -> str:
+    return f"""Analyze the rough task against this exact 100-point readiness rubric:
 
-Prioritize uncertainties that affect the deterministic readiness score. Avoid
-asking for information already clearly stated. Each item must be one direct
-question. Return exactly this JSON shape:
+- Context: 10 points; business need: 10 points.
+- Available data/materials: description 12 points, named sources 4 points,
+  access/privacy/sharing conditions 4 points.
+- Concrete expected deliverable: 15 points.
+- Success criteria: measurable metric 5 points, concrete target 7 points,
+  verification or acceptance method 3 points.
+- Limitations: 10 points for confirmed scope, time, legal, privacy, budget, or
+  technical constraints (an explicit confirmation that none apply is useful).
+- Target users or beneficiaries: 10 points.
+- Business contact and interaction: contact name or email 3 points, role 2
+  points, communication channel 3 points, cadence or feedback process 2 points.
+
+First determine which rubric details are already explicit enough to score. Then
+choose {minimum} to {maximum} direct questions that maximize the potential point
+gain from the missing details. Rank questions by expected score impact. Combine
+closely related subfields when that makes one answer capable of earning all
+points in an area. Do not ask about required skills, technologies, tags, title,
+or industry unless every higher-value scored gap is already covered.
+
+Return exactly this JSON shape and no analysis:
 {{"questions": ["Question 1", "Question 2", "Question 3"]}}
 
 Rough task:
