@@ -319,7 +319,14 @@ def _normalize_card(raw_card: Mapping[str, Any]) -> TaskCard:
 
     for field in ("title", "context", "business_need", "expected_result", "industry"):
         card[field] = _clean_text(card[field])
-    for field in ("target_users", "required_skills", "limitations", "tags", "warnings"):
+    for field in (
+        "target_users",
+        "required_skills",
+        "limitations",
+        "tags",
+        "missing_information",
+        "warnings",
+    ):
         card[field] = _clean_list(card[field])
 
     card["available_data"] = _normalize_nested(card["available_data"], TASK_CARD_TEMPLATE["available_data"])

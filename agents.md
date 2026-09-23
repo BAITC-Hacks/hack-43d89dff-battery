@@ -190,6 +190,30 @@ Offline questions cover users, data/access, deliverable, success, limitations,
 skills, and business interaction. Use custom/injected generators for provider
 experiments rather than coupling providers to storage or scoring.
 
+### Model-output boundary safeguards
+
+Treat all provider and injected-generator output as untrusted, even when a
+provider is configured for JSON output:
+
+- `generate_questions` accepts either a JSON object/list or fenced JSON,
+  then strips empty/duplicate questions and requires the
+  configured minimum.
+- `generate_task_card` normalizes all schema fields. In particular,
+  `missing_information` and `warnings` are always persisted as string lists;
+  a provider returning `null`, a scalar, or malformed nested content must not
+  crash the workflow.
+- `MarketplaceService.submit_answers` normalizes a card again at the storage
+  boundary before evaluation. This protects custom/injected card generators
+  that return a partial card. It merges evaluator-detected gaps into
+  `missing_information`.
+- Custom question generators must return a list of 3–7 usable question
+  strings. Custom card generators must return a mapping. Invalid injected
+  output becomes a safe API error, never corrupted task JSON.
+
+Preserve this defense-in-depth behavior when changing model providers or card
+normalization. Do not trust the provider merely because its prompt requests an
+exact JSON shape.
+
 ## Deterministic readiness scoring
 
 `evaluate_task_card` must remain model-free and deterministic. It returns
@@ -221,6 +245,11 @@ When extending functionality:
 4. For database changes, implement a migration and test an existing DB.
 5. For a new proposal action, define valid source status and all transitions.
 6. Test with no OpenAI key; tests must not consume credits or expose secrets.
+7. Add model-boundary tests for malformed, partial, and fenced provider output.
+   The production path must normalize it before persistence/evaluation.
+8. Keep the proposal acceptance unique-index failure mapped to the same `409
+   task_already_has_team` response as the pre-check; it is the concurrency
+   safety net for competing acceptance requests.
 
 Verified command:
 
@@ -230,9 +259,11 @@ python3 -B -m unittest discover -s tests -v
 
 The suite covers score boundaries, full/empty cards, token enforcement,
 confirmation-before-publishing, catalog filtering, proposal creation, and a
-complete offline task-to-manual-acceptance workflow. Local socket binding was
-restricted in the development sandbox, so add HTTP-level integration tests in
-an environment where a test port can be opened.
+complete offline task-to-manual-acceptance workflow. It also covers malformed
+optional task-card fields, fenced question JSON, and persistence of a partial
+injected task-card response. Local socket binding was restricted in the
+development sandbox, so add HTTP-level integration tests in an environment
+where a test port can be opened.
 
 ## Intentional non-goals
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -104,6 +105,14 @@ def openai_question_generate(prompt: str, *, model: str | None = None, timeout: 
 
 def _parse_questions(value: str | Mapping[str, Any] | Sequence[str]) -> list[str]:
     if isinstance(value, str):
+        value = value.strip()
+        fenced = re.fullmatch(
+            r"[\x60]{3}(?:json)?\s*(.*?)\s*[\x60]{3}",
+            value,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if fenced:
+            value = fenced.group(1)
         try:
             value = json.loads(value)
         except json.JSONDecodeError as error:

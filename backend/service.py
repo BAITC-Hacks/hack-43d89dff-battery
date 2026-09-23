@@ -179,7 +179,14 @@ class MarketplaceService:
             raise ServiceError(422, "invalid_answers", str(error)) from error
         except RuntimeError as error:
             raise ServiceError(502, "task_card_generation_failed", str(error)) from error
+        # Providers and injected test generators are not trusted to return the
+        # full storage contract. Normalize at the application boundary before
+        # scoring or persisting the card.
+        card = _normalize_card(card)
         evaluation = evaluate_task_card(card)
+        card["missing_information"] = list(
+            dict.fromkeys(card["missing_information"] + evaluation["missing_information"])
+        )
 
         with self.database.transaction() as connection:
             connection.execute(
@@ -431,28 +438,38 @@ class MarketplaceService:
                     raise ServiceError(
                         409, "task_already_has_team", "Another proposal is already accepted for this task."
                     )
-            connection.execute(
-                """UPDATE proposals SET status = ?,
-                decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?""",
-                (decision, proposal_id),
-            )
+            try:
+                connection.execute(
+                    """UPDATE proposals SET status = ?,
+                    decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?""",
+                    (decision, proposal_id),
+                )
+            except sqlite3.IntegrityError as error:
+                # The partial unique index is the final concurrency guard when
+                # two business decisions race to accept different proposals.
+                if decision == "accepted":
+                    raise ServiceError(
+                        409, "task_already_has_team", "Another proposal is already accepted for this task."
+                    ) from error
+                raise
             updated = self._proposal_row(connection, proposal_id)
         return _proposal_view(updated, include_team=False)
 
     def _questions(self, draft: str) -> list[str]:
         if self.question_generator:
             questions = self.question_generator(draft)
-            if len(questions) < 3:
-                raise ValueError("question generator returned fewer than three questions")
-            return questions
+            return _validated_questions(questions)
         if self._use_online_ai():
             return generate_questions(draft)
         return generate_questions_offline(draft)
 
     def _card(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if self.card_generator:
-            return self.card_generator(payload)
+            card = self.card_generator(payload)
+            if not isinstance(card, Mapping):
+                raise ValueError("card generator must return a mapping")
+            return dict(card)
         if self._use_online_ai():
             return generate_task_card(payload)
         return generate_task_card_offline(payload)
@@ -652,3 +669,17 @@ def _string_list(value: Any, field: str, *, maximum_items: int) -> list[str]:
 
 def _is_list(value: Any) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _validated_questions(value: Any) -> list[str]:
+    """Validate custom question-generator output before storing it as JSON."""
+    if not _is_list(value):
+        raise ValueError("question generator must return a list of questions")
+    questions = []
+    for item in value:
+        question = _optional_text(item, maximum=1000)
+        if question and question not in questions:
+            questions.append(question)
+    if len(questions) < 3:
+        raise ValueError("question generator returned fewer than three questions")
+    return questions[:7]
