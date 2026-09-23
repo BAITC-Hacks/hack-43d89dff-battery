@@ -1,248 +1,280 @@
-# Project Handoff: Business Task-Card Marketplace
+# Engineering Handoff: Business Task-Card Marketplace
 
-## Product idea
+## Product rules
 
-This repository is a five-hour hackathon MVP for the AI Sana case: gamification of practical business tasks.
+This hackathon MVP turns rough business challenges into publishable student-team
+tasks. The business must answer clarification questions, review and confirm an
+editable task card, then explicitly decide whether to accept or reject a team
+proposal.
 
-A business representative writes a rough task description. The system asks clarification questions, turns the answers into an editable task card, calculates the task's readiness score, and publishes it in an open catalog. Student teams browse/filter tasks, submit proposals, and the business manually accepts or rejects proposals.
-
-The central gamification target is the **business task's readiness**, not company prestige and not student rankings. A better-defined task receives a higher score and a better catalog position. The system must never automatically assign a team.
-
-## Required end-to-end flow
-
-1. Business enters a weak draft.
-2. Question-generation model asks at least three relevant questions.
-3. Business answers them.
-4. Task-card model converts draft, Q&A, and summary into an editable card.
-5. Rating engine scores confirmed fields from 0 to 100 and explains missing information.
-6. Business confirms and publishes the task.
-7. Students browse/filter the catalog and submit a proposal.
-8. Business manually accepts or rejects proposals.
-
-## Repository structure
+Readiness is the gamification target. It is neither company prestige nor a
+student ranking. Do not implement automatic team selection, assignment, or
+rejection. Low-readiness tasks stay publishable and can receive proposals.
 
 ```text
-.
-├── README.md
-├── agents.md                    # This handoff document
-├── .env                         # Local secret; ignored by Git
-├── .gitignore                   # Must keep .env ignored
-└── backend/
-    └── models/
-        ├── generateQuestions.py # Reserved for teammate's question-generation model
-        ├── generateTaskCard.py # Implemented task-card generation model
-        └── evaluateTaskCard.py # Reserved for deterministic readiness scoring
+draft -> questions -> answers -> editable card -> confirm -> publish
+      -> public catalog -> team proposal -> manual business decision
 ```
 
-There is no HTTP server, database, frontend, dependency manifest, or package structure yet. The project currently uses only Python standard-library modules.
+## Implemented architecture
 
-## Task-card requirements
+The code is dependency-free Python: `http.server` serves JSON and SQLite stores
+state. No package install is needed.
 
-The editable card needs these fields:
-
-- title
-- context
-- business_need
-- target_users
-- required_skills
-- available_data
-- limitations
-- expected_result
-- success_criteria
-- business_contact
-- interaction_format
-- industry
-- tags
-- missing_information
-- warnings
-- source_mapping
-- generation_metadata
-
-Rating-relevant fields and weights:
-
-| Area | Points |
-|---|---:|
-| Context and business need | 20 |
-| Data and materials | 20 |
-| Expected result | 15 |
-| Success criteria | 15 |
-| Limitations | 10 |
-| Target users | 10 |
-| Business contact and interaction format | 10 |
-| Total | 100 |
-
-Readiness levels: 0-39 draft, 40-69 working, 70-89 ready, 90-100 priority. Low-scoring tasks remain visible and can receive proposals.
-
-## Current implementation: generateTaskCard.py
-
-### Main callable
-
-```python
-generate_task_card(payload, llm_generate=None) -> dict
+```text
+backend/
+├── api.py                    # HTTP routes, JSON/CORS/error handling, executable server
+├── database.py               # SQLite schema, reads, write transactions
+├── service.py                # Validation, ownership, workflow, catalog, proposals
+└── models/
+    ├── generateQuestions.py  # OpenAI or deterministic questions
+    ├── generateTaskCard.py   # Source-grounded OpenAI or offline task cards
+    └── evaluateTaskCard.py   # Deterministic 0–100 readiness scoring
+tests/
+├── test_evaluate_task_card.py
+└── test_marketplace_workflow.py
 ```
 
-Input contract:
+Run from repository root:
+
+```bash
+python3 -m backend.api
+python3 -B -m unittest discover -s tests -v
+```
+
+Default server/database: `127.0.0.1:8000` and `data/marketplace.sqlite3`.
+
+## Configuration and AI mode
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MARKETPLACE_HOST` | `127.0.0.1` | Server host. |
+| `MARKETPLACE_PORT` | `8000` | Server port. |
+| `MARKETPLACE_DB_PATH` | `data/marketplace.sqlite3` | SQLite database. |
+| `MARKETPLACE_AI_MODE` | `auto` | `auto`, `online`, or `offline`. |
+| `OPENAI_API_KEY` | unset | Enables live model calls. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Responses API model override. |
+| `CORS_ORIGIN` | `*` | CORS response origin. |
+
+`auto` uses OpenAI only when a key is available from environment or `.env`; it
+otherwise uses deterministic offline generation. `offline` is ideal for local
+demo/tests. `online` surfaces provider errors rather than inventing content.
+OpenAI calls use `store: false`.
+
+Never print, commit, or return API keys, authorization headers, or full
+environment values. `.env`, SQLite files, and Python bytecode are ignored.
+
+## Layering and extension boundaries
+
+```text
+MarketplaceHandler (api.py)
+  -> MarketplaceService (service.py)
+      -> generators / deterministic evaluator
+      -> Database read or transaction context (database.py)
+```
+
+Keep `api.py` thin: parse HTTP/JSON and render errors there; put validation,
+authorization, state transitions, and persistence orchestration in
+`MarketplaceService`. Model modules must not write to SQLite or make workflow
+decisions. `MarketplaceService` accepts injectable `question_generator` and
+`card_generator` callables; preserve this provider/test seam.
+
+## Persistence schema
+
+`Database.initialize()` idempotently creates tables. Use `Database.read()` for
+reads and `Database.transaction()` for writes. Transactions use `BEGIN
+IMMEDIATE`, foreign keys, rollback on error, and connection close.
+
+| Table | Important columns / guarantees |
+| --- | --- |
+| `businesses` | Business profile plus `owner_token_hash`. |
+| `teams` | Team profile, `skills_json`, contact and `owner_token_hash`. |
+| `tasks` | Raw draft, question/answer JSON, card/evaluation JSON, status/timestamps, FK business. |
+| `proposals` | FK task/team, proposal text, links/status/timestamps; one team per task once. |
+
+`tasks.status` is exactly `awaiting_answers`, `card_ready`, `confirmed`, or
+`published`.
+
+```text
+create task       => awaiting_answers
+submit answers    => card_ready
+edit card         => card_ready, confirmation reset, score recalculated
+confirm card      => confirmed, confirmation metadata false, score recalculated
+publish task      => published, score recalculated
+```
+
+Published task cards cannot be regenerated or edited. Publishing a published
+task is idempotent. Proposals start as `submitted`; only `accepted` and
+`rejected` are currently user-driven. The schema permits `withdrawn` for a
+future explicit withdraw action. SQLite permits exactly one accepted proposal
+per task. Other proposals deliberately remain submitted after acceptance.
+
+For schema changes, add a real backwards-compatible migration; `CREATE TABLE
+IF NOT EXISTS` does not alter existing SQLite tables.
+
+## Authorization and visibility
+
+This is MVP authorization, not full production identity:
+
+- Business/team creation returns a high-entropy `owner_token` exactly once.
+- Only its SHA-256 hash is persisted.
+- Protected calls use raw `X-Owner-Token`.
+- A business token owns task creation, edits, confirmation, publication,
+  proposal review, and proposal decision.
+- A team token owns proposal submission and its own proposal list.
+- Public viewers see only published tasks. They never receive drafts, answers,
+  tokens, or owner-only metadata.
+
+Do not return tokens from read/list endpoints or weaken the separate business
+and team ownership checks.
+
+## HTTP API
+
+Bodies/responses are JSON. Error shape:
+
+```json
+{"error": {"code": "validation_error", "message": "..."}}
+```
+
+| Method | Endpoint | Body / behavior | Token |
+| --- | --- | --- | --- |
+| `GET` | `/health` | Liveness. | No |
+| `GET` | `/api/meta/readiness` | Weights and levels. | No |
+| `POST` | `/api/businesses` | `name` required; profile/contact optional. | No |
+| `POST` | `/api/teams` | `name`, `contact_email` required; description/skills optional. | No |
+| `POST` | `/api/tasks` | `business_id`, `initial_draft`; returns questions. | Business |
+| `POST` | `/api/tasks/{id}/answers` | `answers` list of 3+; optional `task_summary`. | Business |
+| `PATCH` | `/api/tasks/{id}/card` | Partial editable-card patch. | Business |
+| `POST` | `/api/tasks/{id}/confirm` | Confirms current generated/edited card. | Business |
+| `POST` | `/api/tasks/{id}/publish` | Requires confirmation. | Business |
+| `GET` | `/api/tasks/{id}` | Owner-aware detail. | Optional business |
+| `GET` | `/api/businesses/{id}/tasks` | Own task list. | Business |
+| `GET` | `/api/catalog` | Published catalog. | No |
+| `GET` | `/api/catalog/{id}` | Published task detail. | No |
+| `POST` | `/api/tasks/{id}/proposals` | `team_id`, `message`, `approach`; optional timeline/links. | Team |
+| `GET` | `/api/tasks/{id}/proposals` | Task proposals with team detail. | Business |
+| `GET` | `/api/teams/{id}/proposals` | Own proposal list. | Team |
+| `PATCH` | `/api/proposals/{id}/decision` | `{"decision":"accepted"}` or `rejected`. | Business |
+
+Catalog filters: `tags` (CSV, all must match, case-insensitive), `industry`,
+`readiness` (`draft|working|ready|priority`), `min_score` (0–100), `q`,
+`limit` (1–100; default 50), and `offset` (0+). Results are score-descending,
+then latest publication. Filtering currently happens in Python after published
+rows are read, which is intentional for MVP scale.
+
+Expected errors: `422` invalid input, `403` invalid ownership, `404` missing or
+private resource, `409` invalid state/duplicate, `502` generation failure.
+
+## Task-card contract
+
+Every normalized card has these fields:
+
+```text
+title, context, business_need, target_users, required_skills, available_data,
+limitations, expected_result, success_criteria, business_contact,
+interaction_format, industry, tags, missing_information, warnings,
+source_mapping, generation_metadata
+```
+
+Nested shapes:
 
 ```json
 {
-  "initial_draft": "Required free-text business description.",
-  "clarifying_questions": [
-    "At least three generated questions"
-  ],
-  "answers": [
-    {
-      "question": "Question text",
-      "answer": "Business answer"
-    }
-  ],
-  "task_summary": "Generated summary of the task"
+  "available_data": {"description": null, "sources": [], "access_conditions": null},
+  "success_criteria": [{"metric": "...", "target": "...", "verification_method": "..."}],
+  "business_contact": {"name": null, "role": null, "email": null},
+  "interaction_format": {"channel": null, "frequency": null, "feedback_process": null},
+  "generation_metadata": {"generated_by": "...", "requires_human_confirmation": true}
 }
 ```
 
-Answers may alternatively be passed as ordered strings matching `clarifying_questions`.
-
-Validation requires:
-
-- non-empty `initial_draft`
-- at least three non-empty questions
-- at least three non-empty answers with associated questions
-
-### LLM behavior
-
-If no custom `llm_generate` callable is passed, `generate_task_card` uses `openai_llm_generate`.
-
-- Provider: OpenAI Responses API
-- Default model: `gpt-4o-mini`
-- Override model with `OPENAI_MODEL`
-- Key: `OPENAI_API_KEY` from environment or repository-root `.env`
-- Persistence: API call includes `"store": false`
-- Output mode: JSON object, followed by local normalization and validation
-- No external Python package is required; the implementation uses `urllib.request`
-
-The system prompt requires source-grounded extraction:
-
-1. Question answers override the initial draft.
-2. The initial draft overrides the generated summary.
-3. The model must not invent contacts, metrics, deadlines, data, skills, or technologies.
-4. Unknown facts are returned as `null` or `[]` and reported in `missing_information`.
-5. Every output requires human confirmation before publication.
-6. The model must create a title and context when source content is available.
-7. Measurable statements become structured success criteria.
-8. The LLM generates 3-8 concise tags for catalog filtering from the supported task domain, users, data, technologies, and implementation focus.
-
-Tags are intentionally an exception to literal extraction: they are normalized discovery keywords derived from source material. They must still be grounded in the task; do not create unrelated tags.
-
-### Output safeguards
-
-- `_normalize_card` fills absent schema keys with safe defaults.
-- `_parse_llm_response` accepts a JSON mapping/string and rejects invalid JSON.
-- `_extract_openai_output_text` rejects incomplete or refused Responses API results.
-- HTTP/network failures become safe `RuntimeError` messages and never include the API key.
-- `missing_information` preserves LLM-reported gaps and adds rating-critical gaps.
-- `source_mapping` ties populated fields to `initial_draft`, `task_summary`, or answer IDs such as `answer_3`.
-
-A conservative `_deterministic_fallback` helper remains in the module but is not the current default path. It can be used only if an offline fallback is intentionally desired.
-
-## Verified behavior so far
-
-An end-to-end live OpenAI test was executed successfully with a customer-support triage scenario.
-
-Input included:
-
-- a rough draft about manually triaging support requests
-- users: agents and support managers
-- anonymized ticket data
-- a web prototype as expected result
-- measurable goals: 80% classification accuracy and 20% less triage time
-- privacy/time limitations
-- weekly consultation format
-
-The LLM output successfully contained a title, context, target users, data description, limitations, expected result, two structured success criteria, interaction format, and `generated_by: "openai"`.
-
-It correctly left business contact and industry missing when they were not supplied. The prompt was tightened after an earlier test initially omitted title, context, and success criteria. The tag-generation instructions were added afterward and were prompt-checked, but should receive one additional live test before the demo.
-
-## How to run a manual task-card test
-
-From the repository root:
-
-```bash
-python3 -B - <<'PY'
-import json
-from backend.models.generateTaskCard import generate_task_card
-
-payload = {
-    "initial_draft": "Our support team manually reviews customer requests and sometimes misses urgent issues.",
-    "clarifying_questions": [
-        "Who will use the solution?",
-        "What data is available?",
-        "How will success be measured?"
-    ],
-    "answers": [
-        "Customer-support agents and support managers.",
-        "Anonymized support tickets from the last 12 months.",
-        "Reduce manual triage time by 20 percent."
-    ],
-    "task_summary": "Build an AI-assisted support-ticket prioritization prototype."
-}
-
-print(json.dumps(generate_task_card(payload), ensure_ascii=False, indent=2))
-PY
-```
-
-This makes a real API call and can consume credits. Do not print, commit, or send the API key.
-
-For offline tests, inject a fake generator:
-
-```python
-generate_task_card(payload, llm_generate=lambda _: '{"title": "Test task"}')
-```
-
-A fake response must still be valid JSON. The normalizer will fill missing card fields.
-
-## Security rules
-
-- `.env` is ignored by Git and must remain ignored.
-- Never place `OPENAI_API_KEY` in Python code, README files, tests, chat messages, screenshots, or commits.
-- Never log the Authorization header, API key, or complete environment.
-- If the key is exposed, revoke and replace it immediately.
-- Keep `.env.example` keyless if one is added.
-
-## Next priorities
-
-1. Implement `evaluateTaskCard.py` as deterministic scoring logic. Do not use an LLM for rating.
-2. Define score breakdown and improvement suggestions for every rating criterion.
-3. Implement/align `generateQuestions.py` with the input contract above.
-4. Run a live tag-generation test and ensure tags are concise and filter-friendly.
-5. Add automated unit tests for validation, API-response parsing, prompt behavior, and scoring.
-6. Create an API layer and persistence for drafts, cards, teams, and proposals.
-7. Build catalog filtering by tags/topic/readiness level.
-8. Add team proposals and manual business accept/reject actions.
-9. Add a README with setup, architecture, rating formula, and demo script.
-
-## Non-goals for the hackathon
-
-Do not spend time on:
-
-- full authentication or password recovery
-- real-time chat, notifications, calendar, or file storage
-- training a custom ML model or vector database
-- automatic team selection
-- production deployment or mobile optimization
-- a full project-management tracker
-
-## Integration boundary
-
-The eventual backend flow should be:
+API-editable fields are only:
 
 ```text
-draft + Q&A + summary
-        -> generate_task_card
-        -> human edits/confirms fields
-        -> evaluate_task_card (deterministic 0-100)
-        -> publish to catalog
-        -> student proposal
-        -> manual business decision
+title, context, business_need, target_users, required_skills, available_data,
+limitations, expected_result, success_criteria, business_contact,
+interaction_format, industry, tags
 ```
 
-Keep LLM generation and deterministic rating separate. The LLM structures source information; the rating module decides readiness based only on confirmed fields.
+Protected fields are `missing_information`, `warnings`, `source_mapping`, and
+`generation_metadata`. Nested patches to data/contact/interaction merge with
+the current object; arrays replace their current array. Preserve this behavior
+unless versioning the API.
 
+## Model contracts and source-grounding
+
+```python
+generate_questions(initial_draft, llm_generate=None, minimum=3, maximum=7) -> list[str]
+generate_questions_offline(initial_draft) -> list[str]
+generate_task_card(payload, llm_generate=None) -> dict
+generate_task_card_offline(payload) -> dict
+evaluate_task_card(card) -> dict
+readiness_level(score) -> str
+```
+
+Card-generation input requires a non-empty `initial_draft`, 3+ non-empty
+questions, and 3+ non-empty answers. Answers may be ordered strings aligned to
+questions or objects with `question` and `answer`.
+
+Source requirements:
+
+1. Answers override draft; draft overrides summary.
+2. Never invent contacts, metrics, deadlines, data, access, skills, or tech.
+3. Keep unknown facts null/empty and report gaps.
+4. Tags may be normalized discovery terms only when source-grounded.
+5. Generated output always needs human confirmation and cannot publish/assign.
+
+Offline questions cover users, data/access, deliverable, success, limitations,
+skills, and business interaction. Use custom/injected generators for provider
+experiments rather than coupling providers to storage or scoring.
+
+## Deterministic readiness scoring
+
+`evaluate_task_card` must remain model-free and deterministic. It returns
+`score`, `max_score`, `readiness_level`, criterion `breakdown`, missing fields,
+improvement suggestions, and `scoring_version`.
+
+| Area | Points | Rule |
+| --- | ---: | --- |
+| Context + business need | 20 | 10 points for each non-empty field. |
+| Data/materials | 20 | Description 12, sources 4, access conditions 4. |
+| Expected result | 15 | Concrete non-empty deliverable. |
+| Success criteria | 15 | Metric 5, target 7, verification 3. |
+| Limitations | 10 | Non-empty list. |
+| Target users | 10 | Non-empty list. |
+| Contact + interaction | 10 | Contact 3, role 2, channel 3, cadence/feedback 2. |
+
+Levels are `draft` 0–39, `working` 40–69, `ready` 70–89, and `priority`
+90–100. If scoring changes, increment `scoring_version`, update docs/tests,
+and plan a refresh of persisted `evaluation_json` records.
+
+## Change checklist and verification
+
+When extending functionality:
+
+1. Put workflow rules in `MarketplaceService`, not routes/models.
+2. Preserve authorization and public/private response separation.
+3. For a new card field, update template, normalization, prompts, editable
+   allowlist (if appropriate), docs, tests, and evaluator if score-relevant.
+4. For database changes, implement a migration and test an existing DB.
+5. For a new proposal action, define valid source status and all transitions.
+6. Test with no OpenAI key; tests must not consume credits or expose secrets.
+
+Verified command:
+
+```bash
+python3 -B -m unittest discover -s tests -v
+```
+
+The suite covers score boundaries, full/empty cards, token enforcement,
+confirmation-before-publishing, catalog filtering, proposal creation, and a
+complete offline task-to-manual-acceptance workflow. Local socket binding was
+restricted in the development sandbox, so add HTTP-level integration tests in
+an environment where a test port can be opened.
+
+## Intentional non-goals
+
+Do not add full authentication/password recovery, real-time chat,
+notifications, calendars, file storage, custom model training/vector DBs,
+production deployment, mobile work, or a complete project tracker unless the
+user explicitly reprioritizes the MVP.

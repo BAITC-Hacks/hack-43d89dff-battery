@@ -1,8 +1,8 @@
 """Source-grounded business task-card generation.
 
 The module accepts a business draft, question-answer pairs, and a summary.
-It can call an injected LLM, but has a deterministic fallback so the MVP works
-without an external provider. Unknown facts remain empty rather than invented.
+It supports both OpenAI generation and an explicit deterministic offline mode.
+Unknown facts remain empty rather than invented.
 """
 
 from __future__ import annotations
@@ -108,7 +108,8 @@ def generate_task_card(
     """Return a complete, human-reviewable task card.
 
     llm_generate accepts a prompt and returns a JSON string or mapping.
-    Omitting it uses a conservative deterministic fallback.
+    Omitting it calls the configured OpenAI Responses API integration. Use
+    ``generate_task_card_offline`` when an intentionally offline card is needed.
     """
     normalized_input = _normalize_input(payload)
 
@@ -120,6 +121,18 @@ def generate_task_card(
 
     card = _normalize_card(raw_card)
     card["generation_metadata"]["generated_by"] = generated_by
+    card["generation_metadata"]["requires_human_confirmation"] = True
+    card["missing_information"] = list(
+        dict.fromkeys(card["missing_information"] + _missing_rating_fields(card))
+    )
+    return card
+
+
+def generate_task_card_offline(payload: Mapping[str, Any]) -> TaskCard:
+    """Build a conservative card without a network call for demos and tests."""
+    normalized_input = _normalize_input(payload)
+    card = _normalize_card(_deterministic_fallback(normalized_input))
+    card["generation_metadata"]["generated_by"] = "deterministic_offline"
     card["generation_metadata"]["requires_human_confirmation"] = True
     card["missing_information"] = list(
         dict.fromkeys(card["missing_information"] + _missing_rating_fields(card))
@@ -252,6 +265,11 @@ def _deterministic_fallback(payload: Mapping[str, Any]) -> TaskCard:
     card = deepcopy(TASK_CARD_TEMPLATE)
     card["context"] = payload["initial_draft"]
     card["source_mapping"]["context"] = ["initial_draft"]
+
+    card["title"] = _first_sentence(payload["initial_draft"])[:120]
+    card["business_need"] = payload["initial_draft"]
+    card["source_mapping"]["title"] = ["initial_draft"]
+    card["source_mapping"]["business_need"] = ["initial_draft"]
 
     summary = payload.get("task_summary")
     if summary:
