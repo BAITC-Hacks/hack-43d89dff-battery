@@ -8,13 +8,41 @@ without an external provider. Unknown facts remain empty rather than invented.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 TaskCard = dict[str, Any]
 LLMGenerate = Callable[[str], str | Mapping[str, Any]]
+
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+
+TASK_CARD_SYSTEM_PROMPT = """You are a careful business analyst generating a task card for a student-project marketplace.
+
+Your job is structured extraction, not creative writing. Use only facts in the
+provided source material. Answers to clarification questions override the
+initial draft, and the initial draft overrides the task summary. Do not invent
+facts, contacts, numbers, metrics, deadlines, data, technologies, or skills.
+When information is absent, return null or [] and list the field in
+missing_information. Do not calculate a rating, choose a team, publish a task,
+or create workflow timestamps. Preserve the source language. Return JSON only.
+
+Field rules:
+- Always create a concise title from the task summary or initial draft when either is present.
+- Always populate context from the current situation described in the initial draft.
+- Put the business problem in business_need and the concrete deliverable in expected_result.
+- Convert every measurable target from the answers into success_criteria with metric and target.
+- Generate 3 to 8 concise tags for catalog filtering from the task's domain, users,
+  data, technologies, and implementation focus. Tags may be normalized keywords,
+  but must be supported by the source material and must not be invented.
+- Only leave a field empty when the source material truly does not contain that information."""
+
 
 TASK_CARD_TEMPLATE: TaskCard = {
     "title": None,
@@ -55,7 +83,15 @@ Never invent facts, numbers, contacts, datasets, deadlines, technologies, or
 success targets. Use null or [] for unknown fields and list their field names in
 missing_information. If sources conflict, preserve the answer and add a warning.
 source_mapping maps each populated field to source IDs, such as answer_1.
-Do not calculate rating or workflow status.
+Do not calculate rating or workflow status. Generate 3 to 8 concise tags from
+the task's domain, users, data, technologies, and implementation focus for
+catalog filtering. Tags must be supported by the source material.
+
+Before returning JSON, check that the initial draft produced context, the task
+summary or draft produced a title, and every measurable answer was considered
+for success_criteria. Generate tags even when the business did not explicitly
+provide a tag list: derive them from the task content for catalog filtering.
+Do not omit a field merely because it needs human review.
 
 Return JSON only with this exact shape:
 {schema}
@@ -77,17 +113,91 @@ def generate_task_card(
     normalized_input = _normalize_input(payload)
 
     if llm_generate is None:
-        raw_card = _deterministic_fallback(normalized_input)
-        generated_by = "deterministic_fallback"
-    else:
-        raw_card = _parse_llm_response(llm_generate(build_task_card_prompt(normalized_input)))
-        generated_by = "llm"
+        llm_generate = openai_llm_generate
+
+    raw_card = _parse_llm_response(llm_generate(build_task_card_prompt(normalized_input)))
+    generated_by = "openai" if llm_generate is openai_llm_generate else "llm"
 
     card = _normalize_card(raw_card)
     card["generation_metadata"]["generated_by"] = generated_by
     card["generation_metadata"]["requires_human_confirmation"] = True
-    card["missing_information"] = _missing_rating_fields(card)
+    card["missing_information"] = list(
+        dict.fromkeys(card["missing_information"] + _missing_rating_fields(card))
+    )
     return card
+
+
+def openai_llm_generate(prompt: str, *, model: str | None = None, timeout: int = 30) -> str:
+    """Call the OpenAI Responses API and return its JSON text output."""
+    api_key = _get_openai_api_key()
+    selected_model = model or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
+    request_body = {
+        "model": selected_model,
+        "store": False,
+        "input": [
+            {"role": "developer", "content": TASK_CARD_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "text": {"format": {"type": "json_object"}},
+        "max_output_tokens": 2500,
+    }
+    request = Request(
+        OPENAI_RESPONSES_URL,
+        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response_body = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        raise RuntimeError(f"OpenAI request failed with HTTP {error.code}.") from error
+    except URLError as error:
+        raise RuntimeError("Could not reach the OpenAI API.") from error
+
+    return _extract_openai_output_text(response_body)
+
+
+def _get_openai_api_key() -> str:
+    api_key = os.getenv("OPENAI_API_KEY") or _read_dotenv_value("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is missing. Add it to .env or export it in the environment.")
+    return api_key
+
+
+def _read_dotenv_value(name: str) -> str | None:
+    """Read one local .env variable without adding a dotenv package dependency."""
+    dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+    if not dotenv_path.is_file():
+        return None
+
+    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() == name:
+            return value.strip().strip("\"'") or None
+    return None
+
+
+def _extract_openai_output_text(response_body: Mapping[str, Any]) -> str:
+    """Extract text from a completed Responses API response or raise safely."""
+    if response_body.get("status") != "completed":
+        raise RuntimeError("OpenAI did not complete the task-card response.")
+
+    for output_item in response_body.get("output", []):
+        for content_item in output_item.get("content", []):
+            if content_item.get("type") == "refusal":
+                raise RuntimeError("OpenAI refused to generate the task card.")
+            if content_item.get("type") == "output_text" and content_item.get("text"):
+                return content_item["text"]
+    raise RuntimeError("OpenAI returned no text for the task card.")
+
 
 
 def _normalize_input(payload: Mapping[str, Any]) -> dict[str, Any]:
